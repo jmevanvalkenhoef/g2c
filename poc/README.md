@@ -1,15 +1,19 @@
 # g2c PoC — regtest Lightning escrow lab
 
 Local, free-money replica of the production topology from
-`../docs/ESCROW_SERVICE_SPEC.md`:
+`../docs/ESCROW_SERVICE_SPEC.md`, now including the **real escrow service**
+(`../escrow/`) as a compose service:
 
 ```
 cln-buyer ──(channel)──▶ cln-escrow (+ BoltzExchange/hold) ──(channel)──▶ cln-seller
+                              ▲ RPC sockets (shared volumes)
                               │
-                              ▼
-                        mock-game (game API with fault injection, host port 8080)
+                          escrow service (:8002 on host)
+                              │ GAME_URL (host.docker.internal)
+                     game-backend (host, :8000)
                               ▲
-                        bitcoind (regtest) + miner (1 block / 15 s)
+                        PWA / game-web
+bitcoind (regtest) + miner (1 block / 15 s)
 ```
 
 All coins are regtest sats — worthless, unlimited, mineable on demand.
@@ -48,13 +52,37 @@ or per request: `curl -H 'X-Fault: timeout' ...`.
 Crash drills: `docker compose kill cln-escrow && docker compose up -d cln-escrow`
 while a payment is held — verifies timeout/reconciliation behavior.
 
+## Run the full stack (real Lightning)
+
+```bash
+docker compose build
+./scripts/setup.sh                 # fund nodes, open channels (once per lab life)
+# game backend on the HOST, reachable from docker (note --host 0.0.0.0):
+cd ../game/game-backend && ESCROW_URL=http://localhost:8002 \
+  uv run uvicorn app:app --host 0.0.0.0 --port 8000
+# open http://localhost:8000 — buy flow now moves REAL regtest sats:
+#   QR = genuine BOLT11 hold invoice; tap = cln-buyer pays it;
+#   escrow holds the HTLC, transfers the item, pays cln-seller, settles.
+```
+
+Swap back to the stub anytime with `ESCROW_URL=http://localhost:8001`.
+
+## Manual drills
+
+```bash
+./scripts/hold-demo.sh settle|cancel [sats]   # raw hold-invoice primitives
+curl localhost:8002/v1/sales/<id>/fail -X POST -H 'X-Escrow-Secret: dev-secret'
+docker compose restart escrow                 # crash-recovery drill:
+                                              # held sales resume or fail safe
+```
+
 ## Notes / gotchas
 
 - `elementsproject/lightningd:latest` — pin to the CLN version you validate with.
 - The hold plugin binary is built from `BoltzExchange/hold` `main`; pin to a release
   tag for anything beyond the PoC.
-- Channels are 500k sats; sale amounts ≤ 100k sats in drills.
-- The escrow service skeleton (Phase 2) plugs in via `lightning-cli`/gRPC on
-  cln-escrow and talks to `mock-game:8080` inside the compose network.
-- `--dev-allow-localhost` and `--funding-confirms=1` are PoC conveniences; never
-  copy this config to mainnet.
+- Channels are 500k sats; the lab has survived 20k–70k sat sales in testing.
+- `escrow` reaches the host via `host.docker.internal` (host-gateway) — the game
+  MUST bind 0.0.0.0, not 127.0.0.1.
+- The old `mock-game` service (fault injection) predates the real game backend;
+  kept for contract-level fault drills only.

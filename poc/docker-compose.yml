@@ -87,6 +87,24 @@ services:
     volumes:
       - cln-seller-data:/root/.lightning
 
+  # The REAL escrow service (swap target for the game's ESCROW_URL)
+  escrow:
+    build: ../escrow
+    depends_on: [cln-escrow]
+    ports:
+      - "8002:8000"
+    environment:
+      GAME_URL: http://host.docker.internal:8000   # game backend runs on the host
+      ESCROW_SHARED_SECRET: dev-secret
+      FEE_MSAT: "100"
+    volumes:
+      # CLN nodes' lightning-dirs, shared so we can reach their RPC sockets
+      - cln-escrow-data:/sockets/escrow
+      - cln-buyer-data:/sockets/buyer
+      - cln-seller-data:/sockets/seller
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   # Mock of the third-party game API with fault injection
   mock-game:
     build: ./mock-game

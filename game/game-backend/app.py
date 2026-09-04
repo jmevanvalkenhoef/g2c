@@ -342,9 +342,12 @@ async def simulate_pay(payment_hash: str, request: Request, response: Response):
     if row["status"] != "pending":
         return {"status": row["status"]}
     headers = {"X-Escrow-Secret": SHARED_SECRET} if SHARED_SECRET else {}
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(
-            f"{ESCROW_URL}/v1/sales/{row['sale_id']}/pay", headers=headers)
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            r = await client.post(
+                f"{ESCROW_URL}/v1/sales/{row['sale_id']}/pay", headers=headers)
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"escrow unreachable: {e}")
     if r.status_code >= 400:
         raise HTTPException(502, f"escrow: {r.text}")
     return {"status": "payment submitted"}
