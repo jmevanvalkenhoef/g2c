@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>g2c marketplace</title>
+<link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22g2c%22%2C%22short_name%22%3A%22g2c%22%2C%22display%22%3A%22standalone%22%7D">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  :root { --bg:#12121a; --card:#1d1d29; --fg:#e8e8f0; --dim:#8a8aa0; --acc:#7c5cff; --ok:#3ecf8e; --bad:#ff6b81; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--fg); font:16px/1.45 system-ui,sans-serif; padding-bottom:70px; }
+  header { display:flex; justify-content:space-between; align-items:center; padding:14px 16px; border-bottom:1px solid #2a2a3a; }
+  header b { color:var(--acc); }
+  main { padding:16px; max-width:640px; margin:0 auto; }
+  .card { background:var(--card); border-radius:12px; padding:14px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .card .meta { color:var(--dim); font-size:.85rem; }
+  .price { white-space:nowrap; font-weight:600; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:8px 14px; font-size:.95rem; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--dim); border:1px solid #2a2a3a; }
+  button:disabled { opacity:.4; }
+  nav { position:fixed; bottom:0; left:0; right:0; display:flex; background:var(--card); border-top:1px solid #2a2a3a; }
+  nav[hidden] { display:none; }
+  nav button { flex:1; background:transparent; border-radius:0; padding:12px; color:var(--dim); }
+  nav button.on { color:var(--acc); }
+  input[type=text], input[type=number] { background:#2a2a3a; color:var(--fg); border:0; border-radius:8px; padding:8px 10px; width:100%; }
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+  input[type=number] { -moz-appearance:textfield; appearance:textfield; }
+  .banner { background:var(--card); padding:12px; border-radius:12px; text-align:center; }
+  #login { display:flex; gap:8px; margin:40vh auto 0; max-width:340px; }
+  .pill { font-size:.75rem; padding:2px 8px; border-radius:99px; background:#2a2a3a; color:var(--dim); }
+  .pill.pending { color:#e8c46a; } .pill.ok { color:var(--ok); } .pill.bad { color:var(--bad); }
+  #qrbox { display:flex; flex-direction:column; align-items:center; gap:10px; }
+  #qrbox img, #qrbox canvas { background:#fff; padding:8px; border-radius:8px; }
+  .mono { font-family:ui-monospace,monospace; font-size:.7rem; color:var(--dim); word-break:break-all; }
+  .empty { text-align:center; color:var(--dim); padding:30px 0; }
+  #err { position:fixed; top:10px; left:50%; transform:translateX(-50%); max-width:90vw;
+    background:var(--bad); color:#fff; padding:8px 14px; border-radius:8px; font-size:.85rem;
+    display:none; z-index:9; word-break:break-word; }
+  #err code { font-family:ui-monospace,monospace; }
+</style>
+</head>
+<body>
+<div id="err"></div>
+<div id="app"></div>
+<nav id="nav" hidden>
+  <button data-tab="market" class="on">🛒 Market</button>
+  <button data-tab="inv">🎒 Inventory</button>
+</nav>
+
+<script>
+const $ = sel => document.querySelector(sel);
+let me = null, tab = 'market', pendingQR = null, pollTimer = null;
+const lastPayload = {};   // polling baseline — module scope, survives re-renders
+
+// make errors VISIBLE instead of silently dead buttons
+function showErr(msg) {
+  const e = $('#err'); if (!e) return;
+  e.innerHTML = msg; e.style.display = 'block';
+  setTimeout(() => e.style.display = 'none', 8000);
+}
+window.addEventListener('error', ev => showErr('JS error: ' + ev.message));
+window.addEventListener('unhandledrejection', ev =>
+  showErr('Async error: ' + (ev.reason && ev.reason.message || ev.reason)));
+
+async function api(path, opts = {}) {
+  const pid = sessionStorage.getItem('g2c_player');
+  const headers = {'Content-Type':'application/json'};
+  if (pid) headers['X-Player-Id'] = pid;
+  const r = await fetch(path, { headers, ...opts });
+  if (r.status === 401) { me = null; render(); throw new Error('unauth'); }
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || r.status);
+  return body;
+}
+
+function fmt(msat) { return (msat/1000).toLocaleString() + ' sats'; }
+
+async function render() {
+  const app = $('#app'), nav = $('#nav');
+  clearInterval(pollTimer);
+  if (!me) {
+    nav.hidden = true;
+    app.innerHTML = `<div class="banner"><h2>⚔️ g2c <b>marketplace</b></h2>
+      <p style="color:var(--dim);margin:6px 0 4px">demo game · escrow-powered trading</p>
+      <p class="meta">who are you?</p>
+      <div style="display:flex;gap:10px;justify-content:center;margin-top:10px">
+        <button onclick="loginAs('alice')">🗡 Alice</button>
+        <button onclick="loginAs('bob')">🛡 Bob</button>
+      </div></div>`;
+    return;
+  }
+  nav.hidden = false;
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  if (tab === 'market') await viewMarket();
+  if (tab === 'inv') await viewInv();
+  // banner AFTER the views render (views replace #app innerHTML wholesale)
+  const payout = me.ln_address ? '⚡ ' + me.ln_address
+                : me.nwc_uri    ? '⚡ NWC wallet connected'
+                : '⚡ payout not set — tap to add';
+  app.insertAdjacentHTML('afterbegin',
+    `<header><div><b>${me.name}</b><br><span class="meta" style="cursor:pointer" onclick="openProfile()">${payout}</span></div>` +
+    `<div><button class="ghost" style="padding:4px 10px;font-size:.8rem" onclick="switchPlayer()">switch</button></div></header>`);
+  // diff-aware polling: re-render only when the view data actually changed,
+  // and never while the user is typing
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    if (pendingQR) return watchPurchase(true);
+    if (tab === 'profile') return;
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;
+    try {
+      let data;
+      if (tab === 'market') data = [await api('/v1/market'), await api('/v1/items')];
+      else if (tab === 'inv') data = await api('/v1/items');
+      else return;
+      const j = JSON.stringify(data);
+      if (lastPayload[tab] === j) return;   // nothing changed -> no re-render
+      lastPayload[tab] = j;
+      render();
+    } catch (e) { /* transient */ }
+  }, 2000);
+}
+
+async function viewMarket() {
+  const market = await api('/v1/market');
+  $('#app').innerHTML = `
+    <h3 style="margin:6px 0 10px">Market</h3>
+    ${market.length ? market.map(l => `
+      <div class="card"><div>${l.item_name}<br><span class="meta">seller: ${l.seller_name}</span></div>
+      <div style="text-align:right"><div class="price">${fmt(l.price_msat)}</div>
+      <button ${l.seller_name===me.name?'disabled':''} onclick="buy(${l.id})">${l.seller_name===me.name?'yours':'Buy'}</button></div></div>`).join('')
+    : `<div class="empty">nothing for sale yet — list an item from your inventory</div>`}`;
+}
+async function viewInv() {
+  const items = await api('/v1/items');
+  const mine = items.filter(i => i.owner_id === me.id);
+  $('#app').innerHTML = `<h3 style="margin:6px 0 10px">Inventory (${mine.length})</h3>` +
+    (mine.map(i => i.listing_id
+      ? `<div class="card"><div>${i.name}<br><span class="pill pending">listed · ${fmt(i.price_msat)}</span></div>
+         ${i.listing_status==='open' ? `<button class="ghost" onclick="unlist(${i.listing_id})">Unlist</button>` : `<span class="pill">in flight</span>`}</div>`
+      : `<div class="card"><div>${i.name}</div>
+         <div style="display:flex;gap:6px"><input id="p${i.id}" type="number" placeholder="sats" style="width:90px">
+         <button onclick="list(${i.id})">Sell</button></div></div>`
+    ).join('') || `<div class="empty">nothing here yet</div>`);
+}
+
+function switchPlayer() {
+  sessionStorage.removeItem('g2c_player');
+  me = null; pendingQR = null; render();
+}
+
+async function loginAs(name) {
+  try {
+    me = await api('/v1/players', {method:'POST', body: JSON.stringify({name})});
+    sessionStorage.setItem('g2c_player', me.id);  // per-TAB session
+    render();
+  } catch (e) {
+    showErr('Login failed: ' + e.message + ' — is the game backend running on port 8000?');
+  }
+}
+
+function openProfile() {
+  tab = 'profile';
+  clearInterval(pollTimer);
+  $('#app').innerHTML = `
+    <h3 style="margin:6px 0 10px">Payout settings</h3>
+    <div class="card" style="flex-direction:column;align-items:stretch;gap:8px">
+      <div>Sales proceeds go to YOUR wallet — the game never holds sats.</div>
+      <label class="meta">Lightning address (LUD-16)</label>
+      <input id="lnaddr" type="text" placeholder="satoshi@walletofsatoshi.com" value="${me.ln_address || ''}">
+      <label class="meta">…or Nostr Wallet Connect URI</label>
+      <input id="nwcuri" type="text" placeholder="nostr+walletconnect://…" value="${me.nwc_uri || ''}">
+      <div style="display:flex;gap:8px">
+        <button onclick="saveProfile()">Save</button>
+        <button class="ghost" onclick="tab='inv';render()">Cancel</button>
+      </div>
+    </div>`;
+}
+
+async function saveProfile() {
+  try {
+    me = await api('/v1/players/me', {method:'PUT', body: JSON.stringify({
+      ln_address: $('#lnaddr').value, nwc_uri: $('#nwcuri').value })});
+    tab = 'inv'; render();
+  } catch (e) { showErr('Save failed: ' + e.message); }
+}
+
+async function list(id) {
+  const sats = parseInt($(`#p${id}`).value); if (!sats || sats <= 0) return alert('enter a price');
+  try { await api('/v1/listings', {method:'POST', body: JSON.stringify({item_id:id, price_msat:sats*1000})}); } catch(e){ showErr(e.message); }
+  render();
+}
+async function unlist(id) { try { await api(`/v1/listings/${id}`, {method:'DELETE'}); } catch(e){ showErr(e.message); } render(); }
+
+async function buy(listingId) {
+  const sale = await api('/v1/purchases', {method:'POST', body: JSON.stringify({listing_id: listingId})});
+  showQR(sale);
+}
+
+function showQR(sale) {
+  pendingQR = sale; pendingQR.paid = false;
+  $('#app').innerHTML = `<h3 style="margin:6px 0 10px">Complete payment</h3>
+    <div class="card" style="flex-direction:column; align-items:stretch">
+      <div id="qrbox"><div id="qr" style="cursor:pointer" title="tap to simulate wallet payment"
+        onclick="payQR()"></div>
+        <div class="pill pending" id="pstate">tap the QR code to pay</div>
+        <div class="mono">${sale.payment_request}</div>
+        <button class="ghost" onclick="pendingQR=null;render()">close</button>
+      </div>
+    </div>`;
+  if (typeof QRCode !== 'undefined') {
+    new QRCode($('#qr'), { text: sale.payment_request, width: 220, height: 220 });
+  } else {
+    $('#qr').innerHTML = '<div class="mono">QR library unavailable (offline?) — payment request shown as text</div>';
+  }
+}
+
+async function payQR() {
+  if (!pendingQR || pendingQR.paid) return;
+  pendingQR.paid = true;
+  const el = $('#pstate');
+  if (el) { el.textContent = 'paying…'; }
+  try {
+    await api(`/v1/purchases/${pendingQR.payment_hash}/simulate-pay`, {method:'POST'});
+  } catch (e) {
+    pendingQR.paid = false;
+    if (el) el.textContent = 'tap the QR code to pay';
+    showErr('Payment failed: ' + e.message);
+    return;
+  }
+  watchPurchase();
+}
+
+async function watchPurchase(silent) {
+  if (!pendingQR) return;
+  const s = await api(`/v1/purchases/${pendingQR.payment_hash}`).catch(() => null);
+  if (!s) return;
+  const el = $('#pstate');
+  if (el) {
+    el.textContent = s.status === 'pending' ? (pendingQR.paid ? 'confirming…' : 'tap the QR code to pay')
+                   : s.status === 'completed' ? '✅ paid — item is yours' : '❌ failed — refunded';
+    el.className = 'pill ' + (s.status === 'completed' ? 'ok' : s.status === 'cancelled' ? 'bad' : 'pending');
+  }
+  if (s.status !== 'pending') setTimeout(() => { pendingQR = null; tab = 'inv'; render(); }, 1500);
+}
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => { tab = b.dataset.tab; pendingQR = null; render(); });
+// restore session for THIS tab (sessionStorage), else browser cookie
+(async () => {
+  const pid = sessionStorage.getItem('g2c_player');
+  try {
+    me = await api('/v1/players/me');
+    render();
+  } catch (e) {
+    if (pid) sessionStorage.removeItem('g2c_player');
+    render();
+  }
+})();
+</script>
+</body>
+</html>

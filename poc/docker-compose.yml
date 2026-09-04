@@ -1,0 +1,98 @@
+name: g2c-poc
+
+services:
+  bitcoind:
+    image: bitcoin/bitcoin:28.0
+    command:
+      -regtest
+      -txindex=1
+      -rpcuser=rpcuser
+      -rpcpassword=rpcpass
+      -rpcbind=0.0.0.0
+      -rpcallowip=0.0.0.0/0
+      -fallbackfee=0.0002
+    volumes:
+      - bitcoind-data:/root/.bitcoin
+
+  # Mines blocks on a timer so channels confirm quickly
+  miner:
+    image: bitcoin/bitcoin:28.0
+    depends_on: [bitcoind]
+    entrypoint: >
+      bash -c '
+        set -e
+        sleep 5
+        bitcoin-cli -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass createwallet miner >/dev/null 2>&1 || true
+        ADDR=$$(bitcoin-cli -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass -rpcwallet=miner getnewaddress)
+        echo "pre-mining 200 blocks to $$ADDR"
+        bitcoin-cli -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass -rpcwallet=miner generatetoaddress 200 $$ADDR >/dev/null
+        while true; do
+          bitcoin-cli -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass -rpcwallet=miner generatetoaddress 1 $$ADDR >/dev/null
+          sleep 15
+        done
+      '
+
+  # The escrow's node: CLN + BoltzExchange/hold plugin
+  cln-escrow:
+    build: ./cln-hold
+    depends_on: [bitcoind]
+    command: >
+      --network=regtest
+      --alias=escrow
+      --bitcoin-rpcconnect=bitcoind
+      --bitcoin-rpcuser=rpcuser
+      --bitcoin-rpcpassword=rpcpass
+      --funding-confirms=1
+      --important-plugin=/usr/local/bin/hold
+      --hold-database=sqlite:///root/.lightning/hold.db
+      --log-level=info
+      --dev-allow-localhost
+    volumes:
+      - cln-escrow-data:/root/.lightning
+
+  # Buyer node (pays hold invoices)
+  cln-buyer:
+    image: elementsproject/lightningd:latest
+    depends_on: [bitcoind]
+    command: >
+      --network=regtest
+      --alias=buyer
+      --bitcoin-rpcconnect=bitcoind
+      --bitcoin-rpcuser=rpcuser
+      --bitcoin-rpcpassword=rpcpass
+      --funding-confirms=1
+      --log-level=info
+      --dev-allow-localhost
+    volumes:
+      - cln-buyer-data:/root/.lightning
+
+  # Seller node (receives escrow payouts)
+  cln-seller:
+    image: elementsproject/lightningd:latest
+    depends_on: [bitcoind]
+    command: >
+      --network=regtest
+      --alias=seller
+      --bitcoin-rpcconnect=bitcoind
+      --bitcoin-rpcuser=rpcuser
+      --bitcoin-rpcpassword=rpcpass
+      --funding-confirms=1
+      --log-level=info
+      --dev-allow-localhost
+    volumes:
+      - cln-seller-data:/root/.lightning
+
+  # Mock of the third-party game API with fault injection
+  mock-game:
+    build: ./mock-game
+    ports:
+      - "8080:8080"
+    environment:
+      # global fault mode: off | reject | timeout | server_error
+      FAULT_MODE: "off"
+
+volumes:
+  bitcoind-data:
+  cln-escrow-data:
+  cln-buyer-data:
+  cln-seller-data:

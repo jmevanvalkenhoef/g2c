@@ -1,0 +1,18 @@
+# python / uv
+__pycache__/
+*.pyc
+.venv/
+
+# runtime state
+game/game-backend/data/
+poc/*/data/
+*.db
+*.db-wal
+*.db-shm
+
+# secrets / env
+.env
+*.secret
+
+# OS
+.DS_Store
