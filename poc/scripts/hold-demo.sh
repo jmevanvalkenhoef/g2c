@@ -8,8 +8,8 @@ cd "$(dirname "$0")/.."
 MODE="${1:?usage: hold-demo.sh settle|cancel [amount_sats]}"
 AMT="${2:-10000}"
 
-escrow() { docker compose exec -T cln-escrow lightning-cli "$@"; }
-buyer()  { docker compose exec -T cln-buyer  lightning-cli "$@"; }
+escrow() { docker compose exec -T cln-escrow lightning-cli --regtest "$@"; }
+buyer()  { docker compose exec -T cln-buyer  lightning-cli --regtest "$@"; }
 
 # 1. we generate the preimage and hash — node never sees the preimage until settle
 PREIMAGE=$(openssl rand -hex 32)
@@ -17,13 +17,14 @@ HASH=$(python3 -c "import hashlib;print(hashlib.sha256(bytes.fromhex('$PREIMAGE'
 echo "preimage (secret): $PREIMAGE"
 echo "payment_hash:      $HASH"
 
-# 2. create the hold invoice from the HASH ONLY
-INVOICE=$(escrow holdinvoice "$HASH" "${AMT}sat" "g2c PoC drill")
+# 2. create the hold invoice from the HASH ONLY (amount = plain msat integer)
+INVOICE=$(escrow holdinvoice "$HASH" $((AMT * 1000)))
 BOLT11=$(echo "$INVOICE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["bolt11"])')
 echo "hold invoice: $BOLT11"
 
-echo "==> buyer pays (should sit in-flight; ctrl-C here to see the held state)"
-buyer pay "$BOLT11" || true
+echo "==> buyer pays; the payment must sit IN-FLIGHT (held, not settled)"
+# retry_for=10: pay returns 'pending' after 10s — that pending IS the held state
+timeout 25 docker compose exec -T cln-buyer lightning-cli --regtest -k pay bolt11="$BOLT11" retry_for=10 | python3 -c 'import json,sys; d=json.load(sys.stdin); print("    pay status:", d.get("status"), d.get("message",""))' || true
 
 echo "==> escrow-side view (expect state=open/unpaid but HTLC accepted by hold plugin):"
 escrow listholdinvoices "$HASH" | python3 -m json.tool

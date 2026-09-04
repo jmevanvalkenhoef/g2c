@@ -21,19 +21,23 @@ services:
     entrypoint: >
       bash -c '
         set -e
-        sleep 5
-        bitcoin-cli -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass createwallet miner >/dev/null 2>&1 || true
-        ADDR=$$(bitcoin-cli -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass -rpcwallet=miner getnewaddress)
+        until bitcoin-cli -regtest -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass getblockchaininfo >/dev/null 2>&1; do
+          echo waiting for bitcoind; sleep 2
+        done
+        bitcoin-cli -regtest -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass createwallet miner >/dev/null 2>&1 || true
+        ADDR=$$(bitcoin-cli -regtest -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass -rpcwallet=miner getnewaddress)
         echo "pre-mining 200 blocks to $$ADDR"
-        bitcoin-cli -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass -rpcwallet=miner generatetoaddress 200 $$ADDR >/dev/null
+        bitcoin-cli -regtest -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass -rpcwallet=miner generatetoaddress 200 $$ADDR >/dev/null
         while true; do
-          bitcoin-cli -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass -rpcwallet=miner generatetoaddress 1 $$ADDR >/dev/null
+          bitcoin-cli -regtest -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass -rpcwallet=miner generatetoaddress 1 $$ADDR >/dev/null
           sleep 15
         done
       '
 
   # The escrow's node: CLN + BoltzExchange/hold plugin
   cln-escrow:
+    environment:
+      LIGHTNINGD_NETWORK: regtest
     build: ./cln-hold
     depends_on: [bitcoind]
     command: >
@@ -46,12 +50,13 @@ services:
       --important-plugin=/usr/local/bin/hold
       --hold-database=sqlite:///root/.lightning/hold.db
       --log-level=info
-      --dev-allow-localhost
     volumes:
       - cln-escrow-data:/root/.lightning
 
   # Buyer node (pays hold invoices)
   cln-buyer:
+    environment:
+      LIGHTNINGD_NETWORK: regtest
     image: elementsproject/lightningd:latest
     depends_on: [bitcoind]
     command: >
@@ -62,12 +67,13 @@ services:
       --bitcoin-rpcpassword=rpcpass
       --funding-confirms=1
       --log-level=info
-      --dev-allow-localhost
     volumes:
       - cln-buyer-data:/root/.lightning
 
   # Seller node (receives escrow payouts)
   cln-seller:
+    environment:
+      LIGHTNINGD_NETWORK: regtest
     image: elementsproject/lightningd:latest
     depends_on: [bitcoind]
     command: >
@@ -78,7 +84,6 @@ services:
       --bitcoin-rpcpassword=rpcpass
       --funding-confirms=1
       --log-level=info
-      --dev-allow-localhost
     volumes:
       - cln-seller-data:/root/.lightning
 
