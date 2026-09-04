@@ -97,7 +97,9 @@ POST /v1/sales
     //     never log. Game backend stores payout methods in seller profiles.)
   }
 → 201 { "sale_id": "uuid", "payment_request": "lnbc...",
-        "payment_hash": "<hex>", "expires_at": "RFC3339" }
+        "payment_hash": "<hex>", "expires_at": "RFC3339",
+        "fee_msat": 100, "seller_amount_msat": 20900 }
+        // fee decided by the ESCROW (its revenue), never by the caller
 
 GET /v1/sales/{sale_id}
 → 200 { "state": "HTLC_HELD" | "COMPLETED" | "CANCELLED" | ...,

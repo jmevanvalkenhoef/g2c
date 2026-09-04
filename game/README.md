@@ -30,9 +30,18 @@ cd game/escrow-stub && uv run uvicorn app:app --port 8001
 # open http://localhost:8000 in two browser windows (two player names)
 ```
 
-Env (defaults in parens): `ESCROW_URL` (localhost:8001) on the game;
-`GAME_URL` (localhost:8000), `ESCROW_SHARED_SECRET` (dev-secret), `FEE_MSAT` (100),
-`SALE_FAIL_EVERY=n` (every n-th sale fails) on the stub.
+Env (defaults in parens) on the game: `ESCROW_URL` (localhost:8001),
+`ESCROW_SHARED_SECRET` (dev-secret). On the stub: `GAME_URL`
+(localhost:8000), `ESCROW_SHARED_SECRET`, `SALE_FAIL_EVERY=n` (every n-th sale
+fails). The fee is the **escrow's** revenue: `FEE_MSAT` (100) on the stub, returned
+in the 201 as `fee_msat` + `seller_amount_msat`.
+
+## Regression drill
+
+`game/scripts/e2e.sh` boots both services and runs the full contract through
+happy path, failure path (rollback + relisting), idempotency replays, and the
+double-pay guard — 12 checks, exits non-zero on failure. Run it after any change
+to either side of the contract.
 
 ## Demo script
 

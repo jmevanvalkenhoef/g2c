@@ -36,6 +36,7 @@ from pydantic import BaseModel
 GAME_URL = os.environ.get("GAME_URL", "http://localhost:8000")
 SHARED_SECRET = os.environ.get("ESCROW_SHARED_SECRET", "dev-secret")
 SALE_FAIL_EVERY = int(os.environ.get("SALE_FAIL_EVERY", "0"))
+FEE_MSAT = int(os.environ.get("FEE_MSAT", "100"))   # the fee is OUR revenue
 
 # sale_id -> record
 SALES: dict[str, dict] = {}
@@ -53,7 +54,6 @@ class SaleIn(BaseModel):
     buyer_id: int
     seller_id: int
     amount_msat: int
-    fee_msat: int = 0
     seller_payout: dict  # {type: stub|lnurl|nwc, target: ...} — unused here
 
 
@@ -124,6 +124,8 @@ async def create_sale(body: SaleIn, x_escrow_secret: str = Header(default="")):
     check_secret(x_escrow_secret)
     global _counter
     _counter += 1
+    if body.amount_msat <= FEE_MSAT:
+        raise HTTPException(422, f"amount must exceed fee ({FEE_MSAT} msat)")
     sale_id = uuid.uuid4().hex[:12]
     payment_hash = uuid.uuid4().hex
     sale = {
@@ -143,6 +145,9 @@ async def create_sale(body: SaleIn, x_escrow_secret: str = Header(default="")):
         "payment_request": sale["payment_request"],
         "payment_hash": payment_hash,
         "expires_at": sale["expires_at"],
+        # the fee is decided by the ESCROW, not the caller:
+        "fee_msat": FEE_MSAT,
+        "seller_amount_msat": body.amount_msat - FEE_MSAT,
     }, status_code=201)
 
 

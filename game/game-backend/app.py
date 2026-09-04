@@ -17,14 +17,15 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 DB_PATH = Path(__file__).parent / "data" / "game.db"
 ESCROW_URL = os.environ.get("ESCROW_URL", "http://localhost:8001")
 SHARED_SECRET = os.environ.get("ESCROW_SHARED_SECRET", "dev-secret")  # set "" to disable
-FEE_MSAT = int(os.environ.get("FEE_MSAT", "100"))
 
 ARCHETYPES = [
     "Rusty Sword", "Iron Shield", "Healing Potion", "Elixir of Speed",
@@ -33,7 +34,6 @@ ARCHETYPES = [
 ]
 
 app = FastAPI(title="g2c demo game")
-
 
 # ---------------------------------------------------------------- db
 
@@ -127,19 +127,21 @@ def _startup() -> None:
 
 # ---------------------------------------------------------------- helpers
 
-async def require_player(request: Request, response: Response) -> int:
-    # per-TAB sessions take precedence (X-Player-Id from sessionStorage),
-    # so two tabs in one browser can be two players; cookie is the fallback
-    # (and what phones/browsers use across reloads).
+async def require_player(request: Request, response: Response) -> dict:
+    """Returns the full player row. Per-TAB sessions (X-Player-Id from
+    sessionStorage) take precedence over the cookie, so two tabs in one
+    browser can be two players."""
     pid = request.headers.get("x-player-id") or request.cookies.get("player_id")
     if not pid:
         raise HTTPException(401, "no player session")
     with db() as conn:
-        row = conn.execute("SELECT id FROM players WHERE id=?", (pid,)).fetchone()
+        row = conn.execute(
+            "SELECT id, name, ln_address, nwc_uri FROM players WHERE id=?",
+            (pid,)).fetchone()
     if not row:
         response.delete_cookie("player_id")
         raise HTTPException(401, "unknown player")
-    return row["id"]
+    return dict(row)
 
 
 def check_secret(x_escrow_secret: Optional[str]) -> None:
@@ -196,17 +198,8 @@ def create_player(body: PlayerIn, response: Response):
 
 
 @app.get("/v1/players/me")
-def me(request: Request):
-    pid = request.headers.get("x-player-id") or request.cookies.get("player_id")
-    if not pid:
-        raise HTTPException(401, "no player session")
-    with db() as conn:
-        row = conn.execute(
-            "SELECT id, name, ln_address, nwc_uri FROM players WHERE id=?",
-            (pid,)).fetchone()
-    if not row:
-        raise HTTPException(401, "unknown player")
-    return dict(row)
+async def me(request: Request, response: Response):
+    return await require_player(request, response)
 
 
 class ProfileIn(BaseModel):
@@ -216,7 +209,7 @@ class ProfileIn(BaseModel):
 
 @app.put("/v1/players/me")
 async def update_profile(body: ProfileIn, request: Request, response: Response):
-    pid = await require_player(request, response)
+    pid = (await require_player(request, response))["id"]
     with tx() as conn:
         conn.execute(
             "UPDATE players SET ln_address=?, nwc_uri=? WHERE id=?",
@@ -244,7 +237,7 @@ def items():
 
 @app.post("/v1/listings")
 async def create_listing(body: ListingIn, request: Request, response: Response):
-    seller = await require_player(request, response)
+    seller = (await require_player(request, response))["id"]
     with tx() as conn:
         cur = conn.execute(
             """INSERT INTO listings(item_id, seller_id, price_msat)
@@ -259,7 +252,7 @@ async def create_listing(body: ListingIn, request: Request, response: Response):
 
 @app.delete("/v1/listings/{listing_id}")
 async def cancel_listing(listing_id: int, request: Request, response: Response):
-    seller = await require_player(request, response)
+    seller = (await require_player(request, response))["id"]
     with tx() as conn:
         cur = conn.execute(
             "UPDATE listings SET status='cancelled' "
@@ -285,7 +278,7 @@ def market():
 async def purchase(body: PurchaseIn, request: Request, response: Response):
     """Buyer clicks Buy → we ask the ESCROW (swap by config) to open a sale and
     return a payment request. Game never touches sats."""
-    buyer = await require_player(request, response)
+    buyer = (await require_player(request, response))["id"]
     with tx() as conn:
         row = conn.execute(
             """SELECT l.item_id, l.seller_id, l.price_msat
@@ -295,10 +288,10 @@ async def purchase(body: PurchaseIn, request: Request, response: Response):
             raise HTTPException(409, "listing not open")
         conn.execute(
             "UPDATE listings SET status='in_flight' WHERE id=?", (body.listing_id,))
-    import httpx
-    payload = {
+    payload = {   # NOTE: no fee_msat — the fee is the ESCROW's revenue and
+        # decided by the escrow, returned in its 201 response
         "item_id": row["item_id"], "buyer_id": buyer, "seller_id": row["seller_id"],
-        "amount_msat": row["price_msat"], "fee_msat": FEE_MSAT,
+        "amount_msat": row["price_msat"],
         "seller_payout": {"type": "stub", "target": "demo"},
     }
     headers = {"X-Escrow-Secret": SHARED_SECRET} if SHARED_SECRET else {}
@@ -348,7 +341,6 @@ async def simulate_pay(payment_hash: str, request: Request, response: Response):
         raise HTTPException(404, "unknown purchase")
     if row["status"] != "pending":
         return {"status": row["status"]}
-    import httpx
     headers = {"X-Escrow-Secret": SHARED_SECRET} if SHARED_SECRET else {}
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.post(
@@ -459,10 +451,6 @@ def sale_result(body: SaleResultIn, x_escrow_secret: str = Header(default="")):
                     (row["listing_id"],))
     return {"status": "ok"}
 
-
-# ---------------------------------------------------------------- static PWA
-
-from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 web_dir = Path(__file__).resolve().parent.parent / "game-web"
 app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
