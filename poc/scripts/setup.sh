@@ -46,7 +46,7 @@ cli cln-escrow connect "$SELLER_ID@cln-seller" >/dev/null
 echo "==> opening channels (miner confirms every 15s)"
 open_channel() {  # open_channel <from-node> <peer-id> <label>
   for i in $(seq 12); do
-    OUT=$(cli "$1" fundchannel "$2" "${CHAN_SATS}sat" 2>&1)
+    OUT=$(cli "$1" fundchannel "$2" "${CHAN_SATS}sat" 2>&1) || true
     if echo "$OUT" | grep -q '"txid"'; then
       echo "    $3 tx: $(echo "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["txid"])')"
       return 0
