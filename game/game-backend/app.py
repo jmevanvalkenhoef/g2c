@@ -26,6 +26,9 @@ from pydantic import BaseModel
 DB_PATH = Path(__file__).parent / "data" / "game.db"
 ESCROW_URL = os.environ.get("ESCROW_URL", "http://localhost:8001")
 SHARED_SECRET = os.environ.get("ESCROW_SHARED_SECRET", "dev-secret")  # set "" to disable
+PAYOUT_MODE = os.environ.get("PAYOUT_MODE", "lab")  # lab | real:
+# lab  -> escrow pays the lab's seller node (regtest)
+# real -> escrow resolves the seller's own payout method (lnurl/nwc, signet+)
 
 ARCHETYPES = [
     "Rusty Sword", "Iron Shield", "Healing Potion", "Elixir of Speed",
@@ -286,13 +289,22 @@ async def purchase(body: PurchaseIn, request: Request, response: Response):
             (body.listing_id,)).fetchone()
         if not row:
             raise HTTPException(409, "listing not open")
+        seller = conn.execute(
+            "SELECT ln_address, nwc_uri FROM players WHERE id=?",
+            (row["seller_id"],)).fetchone()
         conn.execute(
             "UPDATE listings SET status='in_flight' WHERE id=?", (body.listing_id,))
+    if PAYOUT_MODE == "real" and seller and (seller["ln_address"] or seller["nwc_uri"]):
+        seller_payout = ({"type": "lnurl", "target": seller["ln_address"]}
+                         if seller["ln_address"] else
+                         {"type": "nwc", "target": seller["nwc_uri"]})
+    else:
+        seller_payout = {"type": "stub", "target": "lab"}
     payload = {   # NOTE: no fee_msat — the fee is the ESCROW's revenue and
         # decided by the escrow, returned in its 201 response
         "item_id": row["item_id"], "buyer_id": buyer, "seller_id": row["seller_id"],
         "amount_msat": row["price_msat"],
-        "seller_payout": {"type": "stub", "target": "demo"},
+        "seller_payout": seller_payout,
     }
     headers = {"X-Escrow-Secret": SHARED_SECRET} if SHARED_SECRET else {}
     async with httpx.AsyncClient(timeout=10) as client:

@@ -24,7 +24,9 @@ services:
         until bitcoin-cli -regtest -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass getblockchaininfo >/dev/null 2>&1; do
           echo waiting for bitcoind; sleep 2
         done
-        bitcoin-cli -regtest -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass createwallet miner >/dev/null 2>&1 || true
+        bitcoin-cli -regtest -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass createwallet miner >/dev/null 2>&1 \
+          || bitcoin-cli -regtest -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass loadwallet miner >/dev/null 2>&1 \
+          || true
         ADDR=$$(bitcoin-cli -regtest -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass -rpcwallet=miner getnewaddress)
         echo "pre-mining 200 blocks to $$ADDR"
         bitcoin-cli -regtest -rpcconnect=bitcoind -rpcuser=rpcuser -rpcpassword=rpcpass -rpcwallet=miner generatetoaddress 200 $$ADDR >/dev/null
@@ -98,6 +100,7 @@ services:
       ESCROW_SHARED_SECRET: dev-secret
       FEE_MSAT: "100"
     volumes:
+      - escrow-data:/app/data
       # CLN nodes' lightning-dirs, shared so we can reach their RPC sockets
       - cln-escrow-data:/sockets/escrow
       - cln-buyer-data:/sockets/buyer
@@ -116,6 +119,7 @@ services:
 
 volumes:
   bitcoind-data:
+  escrow-data:
   cln-escrow-data:
   cln-buyer-data:
   cln-seller-data:

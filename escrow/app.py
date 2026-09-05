@@ -44,6 +44,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from cln import CLN, CLNError
+from payout import PayoutResolver, PayoutError
 
 GAME_URL = os.environ.get("GAME_URL", "http://localhost:8000")
 SHARED_SECRET = os.environ.get("ESCROW_SHARED_SECRET", "dev-secret")
@@ -52,10 +53,15 @@ INVOICE_EXPIRY_S = int(os.environ.get("INVOICE_EXPIRY_S", "600"))
 EXECUTE_RETRIES = int(os.environ.get("EXECUTE_RETRIES", "5"))
 PAYOUT_RETRIES = int(os.environ.get("PAYOUT_RETRIES", "3"))
 LOOP_INTERVAL = float(os.environ.get("LOOP_INTERVAL", "0.5"))
+DEMO_BRIDGE = os.environ.get("DEMO_BRIDGE", "1") == "1"   # 0 on signet: real
+#                                                          wallets pay the QR,
+#                                                          the tap does nothing
 
 ESCROW_NODE = CLN(os.environ.get("ESCROW_NODE_DIR", "/sockets/escrow"))
 BUYER_NODE = CLN(os.environ.get("BUYER_NODE_DIR", "/sockets/buyer"))
 SELLER_NODE = CLN(os.environ.get("SELLER_NODE_DIR", "/sockets/seller"))
+
+RESOLVER = PayoutResolver(seller_node=SELLER_NODE, escrow_node=ESCROW_NODE)
 
 DB_PATH = Path(os.environ.get("DB_PATH", Path(__file__).parent / "data" / "escrow.db"))
 
@@ -104,6 +110,9 @@ def init_db() -> None:
               fee_msat           INTEGER NOT NULL,
               seller_amount_msat INTEGER NOT NULL,
               payment_request    TEXT NOT NULL,
+              seller_payout_type TEXT NOT NULL DEFAULT 'stub',
+              seller_payout_tgt  TEXT,
+              seller_bolt11      TEXT,                   -- resolved payout invoice
               seller_pay_hash    TEXT,                   -- payout leg tracking
               force_fail         INTEGER NOT NULL DEFAULT 0,
               payout_attempts    INTEGER NOT NULL DEFAULT 0,
@@ -114,6 +123,17 @@ def init_db() -> None:
             );
             """
         )
+    # escrow state persists by design (unlike the demo game DB), so guard-add
+    # columns introduced after the first deploy
+    with db() as conn:
+        existing = [r[1] for r in conn.execute("PRAGMA table_info(sales)")]
+        for col, ddl in (
+                ("seller_payout_type", "ALTER TABLE sales ADD COLUMN seller_payout_type TEXT NOT NULL DEFAULT 'stub'"),
+                ("seller_payout_tgt", "ALTER TABLE sales ADD COLUMN seller_payout_tgt TEXT"),
+                ("seller_bolt11", "ALTER TABLE sales ADD COLUMN seller_bolt11 TEXT"),
+                ("payout_attempts", "ALTER TABLE sales ADD COLUMN payout_attempts INTEGER NOT NULL DEFAULT 0")):
+            if col not in existing:
+                conn.execute(ddl)
     print(f"[escrow] db ready at {DB_PATH} (game={GAME_URL})")
 
 
@@ -212,35 +232,25 @@ def cln_pay_ok(node: CLN, bolt11: str, retry_for: int = 30) -> tuple[bool, str]:
 
 
 def seller_payout(sale: dict) -> tuple[bool, Optional[str], str]:
-    """regtest payout profile: invoice at cln-seller, paid from our node.
-    Returns (ok, seller_payment_hash, status).
+    """Resolve + pay the seller payout. Returns (ok, payment_hash, status).
 
-    CRASH-SAFE: the seller invoice uses a deterministic label (g2c-<sale_id>).
-    If we crash after paying but before recording the hash, the retry finds
-    the SAME invoice via its label instead of minting a second one — a fresh
-    invoice per attempt would double-pay the seller on recovery."""
-    label = f"g2c-{sale['sale_id']}"
-    pay_hash, bolt11 = None, None
-    try:
-        inv = SELLER_NODE.call("invoice", [sale["seller_amount_msat"], label,
-                                           "g2c sale payout"])
-        pay_hash, bolt11 = inv["payment_hash"], inv["bolt11"]
-    except CLNError as e:
-        if "already" not in str(e).lower():
-            return False, None, f"invoice: {e}"
-        # label exists from a pre-crash attempt — recover it (idempotency!)
+    CRASH-SAFE across all profiles: we resolve (or recover via deterministic
+    label) and PERSIST (bolt11, payment_hash) BEFORE paying — a crash after
+    paying is recovered via payout_verified() on the recorded hash, never by
+    paying a second invoice."""
+    if sale["seller_pay_hash"] and sale["seller_bolt11"]:
+        bolt11, pay_hash = sale["seller_bolt11"], sale["seller_pay_hash"]
+    else:
         try:
-            found = SELLER_NODE.call("listinvoices", {"label": label})
-            invs = found.get("invoices", [])
-            if not invs:
-                return False, None, "invoice: label exists but not found"
-            inv = invs[0]
-            pay_hash = inv["payment_hash"]
-            if inv.get("status") == "paid":
-                return True, pay_hash, "already paid (recovered)"
-            bolt11 = inv["bolt11"]
-        except CLNError as e2:
-            return False, None, f"listinvoices: {e2}"
+            bolt11, pay_hash = RESOLVER.resolve(
+                {"type": sale["seller_payout_type"],
+                 "target": sale["seller_payout_tgt"]}, sale)
+        except PayoutError as e:
+            return False, None, f"resolve: {e}"
+        with tx() as conn:
+            conn.execute(
+                "UPDATE sales SET seller_bolt11=?, seller_pay_hash=? "
+                "WHERE sale_id=?", (bolt11, pay_hash, sale["sale_id"]))
     ok, status = cln_pay_ok(ESCROW_NODE, bolt11, retry_for=15)
     return ok, pay_hash, status
 
@@ -404,11 +414,14 @@ async def create_sale(body: SaleIn, x_escrow_secret: str = Header(default="")):
         conn.execute(
             """INSERT INTO sales (sale_id, payment_hash, preimage, item_id,
                  buyer_id, seller_id, amount_msat, fee_msat, seller_amount_msat,
-                 payment_request, state, created_at, expires_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 payment_request, seller_payout_type, seller_payout_tgt,
+                 state, created_at, expires_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (sale_id, payment_hash, preimage, body.item_id, body.buyer_id,
              body.seller_id, body.amount_msat, FEE_MSAT,
              body.amount_msat - FEE_MSAT, inv["bolt11"],
+             body.seller_payout.get("type", "stub"),
+             body.seller_payout.get("target"),
              "AWAITING_PAYMENT", datetime.now(timezone.utc).isoformat(),
              expires_at))
     return JSONResponse({
@@ -441,6 +454,9 @@ async def demo_pay(sale_id: str, x_escrow_secret: str = Header(default="")):
         raise HTTPException(404, "unknown sale")
     if sale["state"] != "AWAITING_PAYMENT":
         return {"status": sale["state"]}
+    if not DEMO_BRIDGE:
+        return {"status": "awaiting real wallet payment — scan the QR with "
+                          "your Lightning wallet (signet profile)"}
 
     # fire-and-forget: the buyer-node payment runs in the background; the
     # reconcile loop detects the arriving HTLC on its own, so the HTTP

@@ -1,0 +1,10 @@
+{$DOMAIN}
+
+# game PWA + API
+handle_path /api/* {
+  uri strip_prefix /api
+  reverse_proxy game-backend:8000
+}
+# escrow's sale API is proxied for the GAME BACKEND only (server-to-server
+# happens directly inside the compose network); the PWA never calls it.
+reverse_proxy game-backend:8000

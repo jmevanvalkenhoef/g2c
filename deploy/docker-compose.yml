@@ -1,0 +1,73 @@
+name: g2c-signet
+
+# g2c signet deployment — one VPS, real phones.
+# Env (set in .env next to this file):
+#   DOMAIN=g2c.example.com          (or a DuckDNS subdomain; DNS A-record -> VPS)
+#   ESCROW_SHARED_SECRET=<random>   (game <-> escrow)
+#   PAYOUT_MODE=real                (seller payouts via lnurl/nwc)
+# First boot: channels must be opened + funded manually, see deploy/README.md.
+
+services:
+  caddy:
+    image: caddy:2
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+
+  game-backend:
+    build: { context: ../game/game-backend, dockerfile: ../../deploy/game.Dockerfile }
+    environment:
+      ESCROW_URL: http://escrow:8000
+      ESCROW_SHARED_SECRET: ${ESCROW_SHARED_SECRET}
+      PAYOUT_MODE: real
+    volumes:
+      - game-data:/app/data
+
+  escrow:
+    build: ../escrow
+    environment:
+      GAME_URL: http://game-backend:8000
+      ESCROW_SHARED_SECRET: ${ESCROW_SHARED_SECRET}
+      FEE_MSAT: "1000"
+      DEMO_BRIDGE: "0"          # no lab buyer node: phones' wallets pay the QR
+      ESCROW_NODE_DIR: /cln/lightning
+      SELLER_NODE_DIR: /unused  # lab-only profile
+      BUYER_NODE_DIR: /unused
+    volumes:
+      - escrow-data:/app/data
+      - cln-data:/cln:ro        # read-only access to the node's RPC socket dir
+    depends_on: [cln]
+
+  cln:
+    build: ../poc/cln-hold       # CLN + BoltzExchange/hold
+    command: >
+      --network=signet
+      --alias=g2c-escrow
+      --bitcoin-rpcconnect=bitcoin-signet
+      --bitcoin-rpcuser=rpcuser
+      --bitcoin-rpcpassword=rpcpass
+      --important-plugin=/usr/local/bin/hold
+      --hold-database=sqlite:///root/.lightning/hold.db
+      --log-level=info
+      --addr=0.0.0.0:9735
+    ports: ["9735:9735"]         # inbound peers; forward on the VPS firewall
+    volumes:
+      - cln-data:/root/.lightning
+
+  # public signet bitcoind (no local miner — real network, real blocks)
+  bitcoin-signet:
+    image: bitcoin/bitcoin:28.0
+    command: -signet -txindex=1 -rpcuser=rpcuser -rpcpassword=rpcpass
+             -rpcbind=0.0.0.0 -rpcallowip=0.0.0.0/0
+    volumes:
+      - bitcoin-data:/root/.bitcoin
+
+volumes:
+  caddy-data:
+  game-data:
+  escrow-data:
+  cln-data:
+  bitcoin-data:

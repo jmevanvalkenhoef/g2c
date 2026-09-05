@@ -101,7 +101,20 @@ docker compose exec -T cln-buyer  lightning-cli --regtest listpays
 docker compose exec -T cln-seller lightning-cli --regtest listinvoices
 ```
 
-## 6. Known timing quirks (expected, not bugs)
+## 6. Capacity, restarts, and quirks
+
+- **Channel capacity is consumed by volume, not concurrency**: the in/out
+  channels drain one-way (buyer → escrow → seller). When payouts start
+  failing, run `poc/scripts/topup.sh` (opens fresh channels, no data loss).
+- **After a host/docker restart**: peers may not reconnect by themselves —
+  rerun `./scripts/setup.sh` (idempotent; or topup.sh's connect lines).
+  The miner now re-loads its wallet after bitcoind restarts.
+- Fresh channels need 6+ confirmations + gossip before payments route
+  (setup.sh and topup.sh both wait for this).
+
+## 7. Signet / production
+
+See `deploy/README.md` — VPS ritual, faucet funding, phone onboarding.
 
 - Fresh channels need 6+ confirmations + gossip before payments route —
   `setup.sh` waits for this, so only relevant if you bypass it.
