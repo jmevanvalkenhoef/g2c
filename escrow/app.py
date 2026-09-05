@@ -213,14 +213,34 @@ def cln_pay_ok(node: CLN, bolt11: str, retry_for: int = 30) -> tuple[bool, str]:
 
 def seller_payout(sale: dict) -> tuple[bool, Optional[str], str]:
     """regtest payout profile: invoice at cln-seller, paid from our node.
-    Returns (ok, seller_payment_hash, status)."""
+    Returns (ok, seller_payment_hash, status).
+
+    CRASH-SAFE: the seller invoice uses a deterministic label (g2c-<sale_id>).
+    If we crash after paying but before recording the hash, the retry finds
+    the SAME invoice via its label instead of minting a second one — a fresh
+    invoice per attempt would double-pay the seller on recovery."""
+    label = f"g2c-{sale['sale_id']}"
+    pay_hash, bolt11 = None, None
     try:
-        inv = SELLER_NODE.call("invoice", [sale["seller_amount_msat"],
-                                           f"g2c-{sale['sale_id']}",
+        inv = SELLER_NODE.call("invoice", [sale["seller_amount_msat"], label,
                                            "g2c sale payout"])
-        bolt11, pay_hash = inv["bolt11"], inv["payment_hash"]
+        pay_hash, bolt11 = inv["payment_hash"], inv["bolt11"]
     except CLNError as e:
-        return False, None, f"invoice: {e}"
+        if "already" not in str(e).lower():
+            return False, None, f"invoice: {e}"
+        # label exists from a pre-crash attempt — recover it (idempotency!)
+        try:
+            found = SELLER_NODE.call("listinvoices", {"label": label})
+            invs = found.get("invoices", [])
+            if not invs:
+                return False, None, "invoice: label exists but not found"
+            inv = invs[0]
+            pay_hash = inv["payment_hash"]
+            if inv.get("status") == "paid":
+                return True, pay_hash, "already paid (recovered)"
+            bolt11 = inv["bolt11"]
+        except CLNError as e2:
+            return False, None, f"listinvoices: {e2}"
     ok, status = cln_pay_ok(ESCROW_NODE, bolt11, retry_for=15)
     return ok, pay_hash, status
 
@@ -450,6 +470,19 @@ def force_fail(sale_id: str, x_escrow_secret: str = Header(default="")):
         raise HTTPException(404, "unknown sale")
     save_field(sale_id, "force_fail", 1)
     return {"status": "will_fail"}
+
+
+@app.get("/v1/metrics")
+def metrics():
+    """per-state counts + last transitions (JSON; Prometheus later)."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT state, COUNT(*) n FROM sales GROUP BY state").fetchall()
+        recent = conn.execute(
+            "SELECT sale_id, state, failure_reason FROM sales "
+            "ORDER BY rowid DESC LIMIT 10").fetchall()
+    return {"states": {r["state"]: r["n"] for r in rows},
+            "recent": [dict(r) for r in recent]}
 
 
 @app.get("/v1/health")

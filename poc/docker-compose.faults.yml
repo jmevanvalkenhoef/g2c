@@ -1,0 +1,11 @@
+# Escrow pointed at the fault-injecting mock game (contract drills).
+# Usage: docker compose -f docker-compose.yml -f docker-compose.faults.yml up -d escrow
+# FAULT_MODE: off | reject | timeout | server_error
+services:
+  escrow:
+    environment:
+      GAME_URL: http://mock-game:8080
+      ESCROW_SHARED_SECRET: ""        # mock-game has no secret check
+  mock-game:
+    environment:
+      FAULT_MODE: ${FAULT_MODE:-off}
