@@ -421,15 +421,25 @@ async def demo_pay(sale_id: str, x_escrow_secret: str = Header(default="")):
         raise HTTPException(404, "unknown sale")
     if sale["state"] != "AWAITING_PAYMENT":
         return {"status": sale["state"]}
-    # run in a thread with a hard cap: `pay` blocks while the HTLC is held
-    try:
-        _, status = await asyncio.wait_for(
-            asyncio.to_thread(cln_pay_ok, BUYER_NODE, sale["payment_request"], 8),
-            timeout=14)
-    except asyncio.TimeoutError:
-        status = "in-flight (held at our node)"
-    # 'pending'/'in-flight' is EXPECTED — the HTLC is held at our node
-    return {"status": f"payment submitted ({status})"}
+
+    # fire-and-forget: the buyer-node payment runs in the background; the
+    # reconcile loop detects the arriving HTLC on its own, so the HTTP
+    # response doesn't need to wait for `pay` (which blocks ~10s while the
+    # HTLC is held). Guarded against double-fire by state check above.
+    async def _bg_pay():
+        for attempt in range(3):
+            try:
+                _, status = await asyncio.to_thread(
+                    cln_pay_ok, BUYER_NODE, sale["payment_request"], 8)
+            except Exception:
+                status = "error"
+            if "Unknown" not in status and "Could not find" not in status:
+                return
+            print(f"[escrow] buyer pay retry {attempt+1}: {status}")
+            await asyncio.sleep(5)
+
+    asyncio.create_task(_bg_pay())
+    return {"status": "payment submitted"}
 
 
 @app.post("/v1/sales/{sale_id}/fail")

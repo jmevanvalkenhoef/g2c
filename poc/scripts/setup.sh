@@ -69,6 +69,20 @@ for i in $(seq 40); do
   sleep 5
 done
 
+# announcements need ~6 confirmations + gossip propagation before the buyer's
+# router can use the fresh channel; mine past the depth and wait for gossip
+echo "==> waiting for channel announcements / gossip"
+docker compose exec -T bitcoind bitcoin-cli -regtest -rpcuser=rpcuser \
+  -rpcpassword=rpcpass -rpcwallet=miner generatetoaddress 8 \
+  $(docker compose exec -T bitcoind bitcoin-cli -regtest -rpcuser=rpcuser \
+    -rpcpassword=rpcpass -rpcwallet=miner getnewaddress) >/dev/null
+for i in $(seq 60); do
+  N=$(docker compose exec -T cln-buyer lightning-cli --regtest listnodes 2>/dev/null | \
+      python3 -c 'import json,sys; print(len(json.load(sys.stdin)["nodes"]))' 2>/dev/null)
+  [ "${N:-0}" -ge 3 ] && { echo "    buyer knows $N nodes"; break; }
+  sleep 3
+done
+
 echo
 echo "=== topology ready ==="
 cli cln-buyer  listfunds | python3 -m json.tool
