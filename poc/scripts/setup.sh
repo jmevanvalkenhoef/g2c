@@ -19,6 +19,14 @@ for n in cln-escrow cln-buyer cln-seller; do
 done
 cli cln-escrow getinfo >/dev/null
 
+echo "==> waiting for miner coinbase maturity (>=101 blocks)"
+for i in $(seq 120); do
+  HEIGHT=$(docker compose exec -T bitcoind bitcoin-cli -regtest -rpcuser=rpcuser \
+      -rpcpassword=rpcpass -rpcwallet=miner getblockcount 2>/dev/null)
+  [ "${HEIGHT:-0}" -ge 101 ] && { echo "    chain at $HEIGHT blocks"; break; }
+  sleep 2
+done
+
 echo "==> funding node wallets"
 for n in cln-escrow cln-buyer cln-seller; do
   ADDR=$(cli "$n" newaddr bech32 | python3 -c 'import json,sys; print(json.load(sys.stdin)["bech32"])')
@@ -36,10 +44,22 @@ cli cln-buyer  connect "$ESCROW_ID@cln-escrow" >/dev/null
 cli cln-escrow connect "$SELLER_ID@cln-seller" >/dev/null
 
 echo "==> opening channels (miner confirms every 15s)"
+open_channel() {  # open_channel <from-node> <peer-id> <label>
+  for i in $(seq 12); do
+    OUT=$(cli "$1" fundchannel "$2" "${CHAN_SATS}sat" 2>&1)
+    if echo "$OUT" | grep -q '"txid"'; then
+      echo "    $3 tx: $(echo "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["txid"])')"
+      return 0
+    fi
+    echo "    $3 retry ($i): $(echo "$OUT" | head -c 120)"
+    sleep 10
+  done
+  echo "    $3 FAILED"; return 1
+}
 # buyer -> escrow: gives escrow INBOUND capacity (can receive buyer payments)
-cli cln-buyer  fundchannel "$ESCROW_ID" "${CHAN_SATS}sat" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("    buyer->escrow tx:", d.get("txid", d))'
+open_channel cln-buyer "$ESCROW_ID" "buyer->escrow"
 # escrow -> seller: gives escrow OUTBOUND capacity (can pay sellers)
-cli cln-escrow fundchannel "$SELLER_ID" "${CHAN_SATS}sat" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("    escrow->seller tx:", d.get("txid", d))' 
+open_channel cln-escrow "$SELLER_ID" "escrow->seller"
 
 echo "==> waiting for channels to reach CHANNELD_NORMAL"
 for i in $(seq 40); do
