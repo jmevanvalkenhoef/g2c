@@ -18,7 +18,7 @@ services:
       - caddy-data:/data
 
   game-backend:
-    build: { context: ../game/game-backend, dockerfile: ../../deploy/game.Dockerfile }
+    build: { context: ../game, dockerfile: Dockerfile }
     environment:
       ESCROW_URL: http://escrow:8000
       ESCROW_SHARED_SECRET: ${ESCROW_SHARED_SECRET}
@@ -33,12 +33,13 @@ services:
       ESCROW_SHARED_SECRET: ${ESCROW_SHARED_SECRET}
       FEE_MSAT: "1000"
       DEMO_BRIDGE: "0"          # no lab buyer node: phones' wallets pay the QR
-      ESCROW_NODE_DIR: /cln/lightning
+      CLN_NETWORK: signet
+      ESCROW_NODE_DIR: /cln
       SELLER_NODE_DIR: /unused  # lab-only profile
       BUYER_NODE_DIR: /unused
     volumes:
       - escrow-data:/app/data
-      - cln-data:/cln:ro        # read-only access to the node's RPC socket dir
+      - cln-data:/cln            # RPC socket dir (socket connect needs write)
     depends_on: [cln]
 
   cln:

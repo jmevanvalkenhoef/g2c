@@ -57,9 +57,10 @@ DEMO_BRIDGE = os.environ.get("DEMO_BRIDGE", "1") == "1"   # 0 on signet: real
 #                                                          wallets pay the QR,
 #                                                          the tap does nothing
 
-ESCROW_NODE = CLN(os.environ.get("ESCROW_NODE_DIR", "/sockets/escrow"))
-BUYER_NODE = CLN(os.environ.get("BUYER_NODE_DIR", "/sockets/buyer"))
-SELLER_NODE = CLN(os.environ.get("SELLER_NODE_DIR", "/sockets/seller"))
+CLN_NETWORK = os.environ.get("CLN_NETWORK", "regtest")  # signet on the VPS
+ESCROW_NODE = CLN(os.environ.get("ESCROW_NODE_DIR", "/sockets/escrow"), CLN_NETWORK)
+BUYER_NODE = CLN(os.environ.get("BUYER_NODE_DIR", "/sockets/buyer"), CLN_NETWORK)
+SELLER_NODE = CLN(os.environ.get("SELLER_NODE_DIR", "/sockets/seller"), CLN_NETWORK)
 
 RESOLVER = PayoutResolver(seller_node=SELLER_NODE, escrow_node=ESCROW_NODE)
 

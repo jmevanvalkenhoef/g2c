@@ -1,0 +1,15 @@
+# Local dry-run of the signet stack: no caddy/TLS (needs a real domain),
+# game + escrow published directly. Usage (from deploy/):
+#   docker compose -f docker-compose.yml -f dryrun-compose.yml up -d
+#   docker compose -f docker-compose.yml -f dryrun-compose.yml up -d --scale caddy=0
+services:
+  caddy:
+    profiles: ["tls"]          # excluded unless --profile tls
+  game-backend:
+    ports: ["8010:8000"]
+  escrow:
+    ports: ["8012:8000"]
+    environment:
+      DEMO_BRIDGE: "0"
+  cln:
+    ports: ["9735:9735"]

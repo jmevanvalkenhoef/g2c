@@ -467,5 +467,6 @@ def sale_result(body: SaleResultIn, x_escrow_secret: str = Header(default="")):
     return {"status": "ok"}
 
 
-web_dir = Path(__file__).resolve().parent.parent / "game-web"
+web_dir = Path(os.environ.get("WEB_DIR")
+               or Path(__file__).resolve().parent.parent / "game-web")
 app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
