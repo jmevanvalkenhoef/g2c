@@ -1,5 +1,8 @@
 # g2c PoC — regtest Lightning escrow lab
 
+
+> **Runbook**: see `../docs/RUNBOOK.md` for startup, the three watch panes,
+> click-to-trace mapping, failure drills, and ledger inspection.
 Local, free-money replica of the production topology from
 `../docs/ESCROW_SERVICE_SPEC.md`, now including the **real escrow service**
 (`../escrow/`) as a compose service:
