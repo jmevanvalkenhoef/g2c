@@ -9,6 +9,7 @@ name: g2c-signet
 
 services:
   caddy:
+    restart: unless-stopped
     image: caddy:2
     ports: ["80:80", "443:443"]
     environment:
@@ -18,6 +19,7 @@ services:
       - caddy-data:/data
 
   game-backend:
+    restart: unless-stopped
     build: { context: ../game, dockerfile: Dockerfile }
     environment:
       ESCROW_URL: http://escrow:8000
@@ -27,13 +29,14 @@ services:
       - game-data:/app/data
 
   escrow:
+    restart: unless-stopped
     build: ../escrow
     environment:
       GAME_URL: http://game-backend:8000
       ESCROW_SHARED_SECRET: ${ESCROW_SHARED_SECRET}
       FEE_MSAT: "1000"
       DEMO_BRIDGE: "0"          # no lab buyer node: phones' wallets pay the QR
-      CLN_NETWORK: signet
+      CLN_NETWORK: ${NETWORK:-testnet}
       ESCROW_NODE_DIR: /cln
       SELLER_NODE_DIR: /unused  # lab-only profile
       BUYER_NODE_DIR: /unused
@@ -43,9 +46,10 @@ services:
     depends_on: [cln]
 
   cln:
+    restart: unless-stopped
     build: ../poc/cln-hold       # CLN + BoltzExchange/hold
     command: >
-      --network=signet
+      --network=${NETWORK:-testnet}
       --alias=g2c-escrow
       --bitcoin-rpcconnect=bitcoin-signet
       --bitcoin-rpcuser=rpcuser
@@ -60,8 +64,10 @@ services:
 
   # public signet bitcoind (no local miner — real network, real blocks)
   bitcoin-signet:
+    restart: unless-stopped
     image: bitcoin/bitcoin:28.0
-    command: -signet -txindex=1 -rpcuser=rpcuser -rpcpassword=rpcpass
+    # pruned: our wallet is new; we never need history older than the chain tip
+    command: -${NETWORK:-testnet} -prune=550 -rpcuser=rpcuser -rpcpassword=rpcpass
              -rpcbind=0.0.0.0 -rpcallowip=0.0.0.0/0
     volumes:
       - bitcoin-data:/root/.bitcoin

@@ -3,7 +3,8 @@ name = "g2c-escrow"
 version = "0.1.0"
 description = "g2c real escrow service: hold-invoice escrow over CLN (regtest profile)"
 requires-python = ">=3.11"
-dependencies = ["fastapi>=0.115", "uvicorn>=0.32", "httpx>=0.27"]
+dependencies = ["fastapi>=0.115", "uvicorn>=0.32", "httpx>=0.27",
+                "coincurve>=20", "cryptography>=43", "websocket-client>=1.8"]
 
 [tool.uv]
 package = false

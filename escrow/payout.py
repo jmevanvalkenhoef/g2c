@@ -5,9 +5,8 @@ Profiles:
                        only; stands in for a real seller wallet.
   lnurl (type "lnurl"): Lightning address (LUD-16). Two HTTPS GETs, fresh
                        invoice minted at purchase time, seller never involved.
-  nwc  (type "nwc"):   Nostr Wallet Connect. TODO(signet): requires relay
-                       roundtrip + NIP-44; implement when a real Zeus wallet
-                       is paired on the VPS.
+  nwc  (type "nwc"):   Nostr Wallet Connect (NIP-47): make_invoice via
+                       Nostr relays, NIP-44 encrypted, BIP340 signed.
 
 All resolvers return (bolt11, payment_hash) or raise PayoutError. The
 payment_hash lets the caller verify/crash-recover the payout via listpays.
@@ -90,9 +89,15 @@ class PayoutResolver:
                                       sale["seller_amount_msat"])
             return bolt11, pay_hash
         if ptype == "nwc":
-            raise PayoutError(
-                "NWC payout not implemented yet (signet TODO: pair Zeus, "
-                "implement make_invoice via Nostr relays)")
+            import nwc
+            try:
+                bolt11, pay_hash = nwc.request_invoice(
+                    payout["target"], sale["seller_amount_msat"],
+                    "g2c sale payout")
+            except nwc.NWCError as e:
+                raise PayoutError(f"nwc: {e}") from e
+            verify_invoice(self.escrow_node, bolt11, sale["seller_amount_msat"])
+            return bolt11, pay_hash
         raise PayoutError(f"unknown payout type: {ptype!r}")
 
     def _lab(self, sale: dict) -> tuple[str, str]:
