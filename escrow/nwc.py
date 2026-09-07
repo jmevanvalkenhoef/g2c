@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import websocket  # websocket-client
 
 import bip340
+import nip04
 import nip44
 
 
@@ -54,10 +55,11 @@ def _event_id(pubkey: str, created_at: int, kind: int,
 
 
 def _make_request_event(secret: bytes, wallet_pub: str, payload: dict) -> dict:
-    ck = nip44.get_conversation_key(secret, bytes.fromhex(wallet_pub))
-    nonce = secrets.token_bytes(32)
-    content = nip44.b64(nip44.encrypt(
-        json.dumps(payload, separators=(",", ":")).encode(), ck, nonce))
+    # Zeus's NWC service speaks NIP-04; the NIP-47 spec says NIP-44 — send
+    # NIP-04 (works everywhere today) and accept either on responses.
+    ck = nip04.conversation_key(secret, bytes.fromhex(wallet_pub))
+    content = nip04.encrypt(
+        json.dumps(payload, separators=(",", ":")).encode(), ck)
     pub = bip340.pubkey(secret).hex()
     created_at = int(time.time())
     tags = [["p", wallet_pub]]
@@ -72,8 +74,12 @@ def _parse_response(event: dict, secret: bytes, wallet_pub: str) -> dict:
         raise NWCError("response from unexpected pubkey")
     if not bip340_signs_event(event):
         raise NWCError("response signature invalid")
-    ck = nip44.get_conversation_key(secret, bytes.fromhex(wallet_pub))
-    content = nip44.decrypt(nip44.b64_decode(event["content"]), ck)
+    if nip04.is_nip04(event["content"]):
+        ck = nip04.conversation_key(secret, bytes.fromhex(wallet_pub))
+        content = nip04.decrypt(event["content"], ck)
+    else:
+        ck = nip44.get_conversation_key(secret, bytes.fromhex(wallet_pub))
+        content = nip44.decrypt(nip44.b64_decode(event["content"]), ck)
     return json.loads(content)
 
 
@@ -129,7 +135,8 @@ def request_invoice(uri: str, amount_msat: int, description: str,
 def _request_via_relay(relay_url, req, secret, wallet, timeout) -> tuple[str, str]:
     sub = f"g2c_{secrets.token_hex(4)}"
     try:
-        ws = websocket.create_connection(relay_url, timeout=timeout)
+        ws = websocket.create_connection(relay_url, timeout=timeout,
+                                                  subprotocols=["nostr"])  # relays require the nostr subprotocol
     except Exception as e:
         raise NWCError(f"relay connect failed: {e}") from e
     ws.settimeout(timeout)
