@@ -8,7 +8,7 @@ sys.path.insert(0, ".")
 import nip44
 from coincurve import PrivateKey
 
-v = json.load(open("/tmp/nip44_vectors.json"))["v2"]
+v = json.load(open("testdata/nip44.vectors.json"))["v2"]
 fails = 0
 
 # conversation keys

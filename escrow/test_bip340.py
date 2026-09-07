@@ -2,7 +2,7 @@ import csv, sys, hashlib
 sys.path.insert(0, ".")
 import bip340
 
-rows = list(csv.DictReader(open('/tmp/bip340_vectors.csv')))
+rows = list(csv.DictReader(open('testdata/bip340.vectors.csv')))
 n = fails = 0
 for r in rows:
     if not r.get("secret key") or r["secret key"] in ("", "0"*64) or len(r["message"]) != 64:

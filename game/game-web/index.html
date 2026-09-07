@@ -205,7 +205,7 @@ function showQR(sale) {
     <div class="card" style="flex-direction:column; align-items:stretch">
       <div id="qrbox"><div id="qr" style="cursor:pointer" title="tap to simulate wallet payment"
         onclick="payQR()"></div>
-        <div class="pill pending" id="pstate">tap the QR code to pay</div>
+        <div class="pill pending" id="pstate">tap the QR to pay (lab) — or scan it with your Lightning wallet</div>
         <div class="mono">${sale.payment_request}</div>
         <button class="ghost" onclick="pendingQR=null;render()">close</button>
       </div>
@@ -226,7 +226,7 @@ async function payQR() {
     await api(`/v1/purchases/${pendingQR.payment_hash}/simulate-pay`, {method:'POST'});
   } catch (e) {
     pendingQR.paid = false;
-    if (el) el.textContent = 'tap the QR code to pay';
+    if (el) el.textContent = 'tap the QR to pay (lab) — or scan it with your Lightning wallet';
     showErr('Payment failed: ' + e.message);
     return;
   }
@@ -239,7 +239,7 @@ async function watchPurchase(silent) {
   if (!s) return;
   const el = $('#pstate');
   if (el) {
-    el.textContent = s.status === 'pending' ? (pendingQR.paid ? 'confirming…' : 'tap the QR code to pay')
+    el.textContent = s.status === 'pending' ? (pendingQR.paid ? 'confirming…' : 'tap the QR to pay (lab) — or scan it with your Lightning wallet')
                    : s.status === 'completed' ? '✅ paid — item is yours' : '❌ failed — refunded';
     el.className = 'pill ' + (s.status === 'completed' ? 'ok' : s.status === 'cancelled' ? 'bad' : 'pending');
   }
