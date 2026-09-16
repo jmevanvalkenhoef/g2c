@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 REAL="${1:-}"
-GAME=8000
+GAME="${GAME_PORT:-8000}"
 ALICE=1; BOB=2
 PASS=0; FAIL=0
 STUB_PID=""

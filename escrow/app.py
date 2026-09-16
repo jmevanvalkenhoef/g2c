@@ -44,7 +44,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from cln import CLN, CLNError
+from node import make_node, NodeError
 from payout import PayoutResolver, PayoutError
+from node import make_node  # noqa: F811 (single import)
 
 GAME_URL = os.environ.get("GAME_URL", "http://localhost:8000")
 SHARED_SECRET = os.environ.get("ESCROW_SHARED_SECRET", "dev-secret")
@@ -57,10 +59,16 @@ DEMO_BRIDGE = os.environ.get("DEMO_BRIDGE", "1") == "1"   # 0 on signet: real
 #                                                          wallets pay the QR,
 #                                                          the tap does nothing
 
-CLN_NETWORK = os.environ.get("CLN_NETWORK", "regtest")  # signet on the VPS
-ESCROW_NODE = CLN(os.environ.get("ESCROW_NODE_DIR", "/sockets/escrow"), CLN_NETWORK)
-BUYER_NODE = CLN(os.environ.get("BUYER_NODE_DIR", "/sockets/buyer"), CLN_NETWORK)
-SELLER_NODE = CLN(os.environ.get("SELLER_NODE_DIR", "/sockets/seller"), CLN_NETWORK)
+CLN_NETWORK = os.environ.get("CLN_NETWORK", "regtest")  # lab: regtest
+# NODE_BACKEND=cln|lnd (env). The escrow's own node is the only one that must
+# speak the backend; the lab's buyer/seller helper nodes are always CLN.
+ESCROW_NODE = make_node(lightning_dir=os.environ.get("ESCROW_NODE_DIR", "/sockets/escrow"),
+                        network=CLN_NETWORK)
+# lab helper nodes (always CLN in the lab topology)
+BUYER_NODE = make_node(lightning_dir=os.environ.get("BUYER_NODE_DIR", "/sockets/buyer"),
+                       network=CLN_NETWORK)
+SELLER_NODE = make_node(lightning_dir=os.environ.get("SELLER_NODE_DIR", "/sockets/seller"),
+                        network=CLN_NETWORK)
 
 RESOLVER = PayoutResolver(seller_node=SELLER_NODE, escrow_node=ESCROW_NODE)
 
@@ -211,20 +219,16 @@ async def notify_game(payment_hash: str, result: str) -> None:
 # ---------------------------------------------------------------- cln helpers
 
 def hold_state(payment_hash: str) -> Optional[str]:
-    """state of a hold invoice at our node: open/unpaid/accepted/settled/cancelled"""
-    try:
-        res = ESCROW_NODE.call("listholdinvoices", [payment_hash])
-    except CLNError:
-        return None
-    invs = res.get("holdinvoices", [])
-    if not invs:
-        return None
-    return invs[0].get("state")
+    """unified state at our node: open/accepted/settled/cancelled"""
+    return ESCROW_NODE.hold_invoice_state(payment_hash)
 
 
-def cln_pay_ok(node: CLN, bolt11: str, retry_for: int = 30) -> tuple[bool, str]:
-    """Pay an invoice from `node`. Returns (done, status)."""
-    try:
+def cln_pay_ok(node, bolt11: str, retry_for: int = 30) -> tuple[bool, str]:
+    """Pay an invoice from a NodeClient/CLN node. Returns (done, status)."""
+    pay = getattr(node, "pay_invoice", None)
+    if pay:                                   # NodeClient interface
+        return pay(bolt11, retry_for)
+    try:                                      # raw CLN (lab helper nodes)
         res = node.call("pay", {"bolt11": bolt11, "retry_for": retry_for})
         status = res.get("status", "pending")
     except CLNError as e:
@@ -260,12 +264,7 @@ def payout_verified(sale: dict) -> bool:
     """crash-recovery: was the seller payment already completed?"""
     if not sale["seller_pay_hash"]:
         return False
-    try:
-        res = ESCROW_NODE.call("listpays", {"payment_hash": sale["seller_pay_hash"]})
-        pays = res.get("pays", [])
-    except CLNError:
-        return False
-    return any(p.get("status") == "complete" for p in pays)
+    return ESCROW_NODE.payment_state(sale["seller_pay_hash"]) == "complete"
 
 
 # ---------------------------------------------------------------- state machine
@@ -273,9 +272,9 @@ def payout_verified(sale: dict) -> bool:
 async def cancel_and_close(sale: dict, reason: str) -> None:
     set_state(sale["sale_id"], "CANCELLING", reason)
     try:
-        ESCROW_NODE.call("cancelholdinvoice", [sale["payment_hash"]])
-    except CLNError as e:
-        print(f"[escrow] cancelholdinvoice: {e}")
+        ESCROW_NODE.cancel_hold_invoice(sale["payment_hash"])
+    except NodeError as e:
+        print(f"[escrow] cancel invoice: {e}")
     set_state(sale["sale_id"], "CANCELLED", reason)
     await notify_game(sale["payment_hash"], "cancelled")
 
@@ -339,11 +338,11 @@ async def drive(sale: dict) -> None:
     if state == "SETTLING":
         # NEVER rollback after a successful seller payment: settle is ours to keep retrying
         try:
-            ESCROW_NODE.call("settleholdinvoice", [sale["preimage"]])
+            ESCROW_NODE.settle_hold_invoice(sale["preimage"])
             set_state(sid, "COMPLETED")
             await notify_game(sale["payment_hash"], "completed")
-        except CLNError as e:
-            if "already" in str(e).lower() or "paid" in str(e).lower():
+        except NodeError as e:
+            if "already" in str(e).lower() or "paid" in str(e).lower() or "unknown" in str(e).lower():
                 set_state(sid, "COMPLETED")
                 await notify_game(sale["payment_hash"], "completed")
             else:
@@ -406,9 +405,15 @@ async def create_sale(body: SaleIn, x_escrow_secret: str = Header(default="")):
     sale_id = secrets.token_hex(6)
     try:
         # hash-only creation: the node cannot settle without our preimage
-        inv = ESCROW_NODE.call("holdinvoice", [payment_hash, body.amount_msat])
-    except CLNError as e:
-        raise HTTPException(502, f"holdinvoice failed: {e}")
+        bolt11 = ESCROW_NODE.create_hold_invoice(payment_hash, body.amount_msat)
+    except NodeError as e:
+        if "LND_BUILD_NEEDS_PREIMAGE" in str(e):
+            # fallback: generate preimage first, node learns it at creation
+            # (acceptable on self-hosted nodes; spec §2 trade-off)
+            bolt11, payment_hash = ESCROW_NODE.create_hold_invoice_with_preimage(
+                preimage, body.amount_msat)
+        else:
+            raise HTTPException(502, f"holdinvoice failed: {e}")
     expires_at = (datetime.now(timezone.utc)
                   + timedelta(seconds=INVOICE_EXPIRY_S)).isoformat()
     with tx() as conn:
@@ -420,14 +425,14 @@ async def create_sale(body: SaleIn, x_escrow_secret: str = Header(default="")):
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (sale_id, payment_hash, preimage, body.item_id, body.buyer_id,
              body.seller_id, body.amount_msat, FEE_MSAT,
-             body.amount_msat - FEE_MSAT, inv["bolt11"],
+             body.amount_msat - FEE_MSAT, bolt11,
              body.seller_payout.get("type", "stub"),
              body.seller_payout.get("target"),
              "AWAITING_PAYMENT", datetime.now(timezone.utc).isoformat(),
              expires_at))
     return JSONResponse({
         "sale_id": sale_id,
-        "payment_request": inv["bolt11"],
+        "payment_request": bolt11,
         "payment_hash": payment_hash,
         "expires_at": expires_at,
         "fee_msat": FEE_MSAT,
@@ -505,7 +510,7 @@ def metrics():
 @app.get("/v1/health")
 def health():
     try:
-        ESCROW_NODE.call("getinfo")
+        ESCROW_NODE.get_info()
         node = "ok"
     except Exception as e:
         node = f"error: {e}"

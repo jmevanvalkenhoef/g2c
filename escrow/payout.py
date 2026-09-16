@@ -59,14 +59,14 @@ def resolve_lnurl(address: str, amount_msat: int,
             c.close()
 
 
-def verify_invoice(node: CLN, bolt11: str, expect_msat: int) -> str:
+def verify_invoice(node, bolt11: str, expect_msat: int) -> str:
     """Decode via our own node; check amount; return payment_hash."""
     try:
-        d = node.call("decodepay", [bolt11])
-    except CLNError as e:
-        raise PayoutError(f"decodepay failed: {e}") from e
+        d = node.decode_invoice(bolt11)
+    except Exception as e:
+        raise PayoutError(f"decode failed: {e}") from e
     got = d.get("amount_msat")
-    if got is not None and int(got) != expect_msat:
+    if got is not None and got != expect_msat:
         raise PayoutError(f"invoice amount {got} != expected {expect_msat}")
     return d["payment_hash"]
 
@@ -102,16 +102,8 @@ class PayoutResolver:
 
     def _lab(self, sale: dict) -> tuple[str, str]:
         label = f"g2c-{sale['sale_id']}"
-        try:
-            inv = self.seller_node.call(
-                "invoice", [sale["seller_amount_msat"], label, "g2c sale payout"])
-            return inv["bolt11"], inv["payment_hash"]
-        except CLNError as e:
-            if "already" not in str(e).lower():
-                raise PayoutError(f"invoice: {e}") from e
-            # deterministic label: recover the pre-crash invoice (idempotency)
-            found = self.seller_node.call("listinvoices", {"label": label})
-            invs = found.get("invoices", [])
-            if not invs:
-                raise PayoutError("invoice: label exists but not found")
-            return invs[0]["bolt11"], invs[0]["payment_hash"]
+        found = self.seller_node.find_invoice_by_label(label)
+        if found:                            # deterministic label: recover the
+            return found["bolt11"], found["payment_hash"]   # pre-crash invoice
+        return self.seller_node.create_invoice(
+            sale["seller_amount_msat"], label, "g2c sale payout")

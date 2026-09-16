@@ -2,6 +2,7 @@ name: g2c-poc
 
 services:
   bitcoind:
+    restart: unless-stopped
     image: bitcoin/bitcoin:28.0
     command:
       -regtest
@@ -16,6 +17,7 @@ services:
 
   # Mines blocks on a timer so channels confirm quickly
   miner:
+    restart: unless-stopped
     image: bitcoin/bitcoin:28.0
     depends_on: [bitcoind]
     entrypoint: >
@@ -38,6 +40,7 @@ services:
 
   # The escrow's node: CLN + BoltzExchange/hold plugin
   cln-escrow:
+    restart: unless-stopped
     environment:
       LIGHTNINGD_NETWORK: regtest
     build: ./cln-hold
@@ -57,6 +60,7 @@ services:
 
   # Buyer node (pays hold invoices)
   cln-buyer:
+    restart: unless-stopped
     environment:
       LIGHTNINGD_NETWORK: regtest
     image: elementsproject/lightningd:latest
@@ -74,6 +78,7 @@ services:
 
   # Seller node (receives escrow payouts)
   cln-seller:
+    restart: unless-stopped
     environment:
       LIGHTNINGD_NETWORK: regtest
     image: elementsproject/lightningd:latest
@@ -91,6 +96,7 @@ services:
 
   # The REAL escrow service (swap target for the game's ESCROW_URL)
   escrow:
+    restart: unless-stopped
     build: ../escrow
     depends_on: [cln-escrow]
     ports:
@@ -110,6 +116,7 @@ services:
 
   # Mock of the third-party game API with fault injection
   mock-game:
+    restart: unless-stopped
     build: ./mock-game
     ports:
       - "8080:8080"
