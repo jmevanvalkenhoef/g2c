@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 WorkingDirectory=/root/projects/g2c/game/game-backend
-EnvironmentFile=/etc/g2c/env
+EnvironmentFile=/etc/g2c/game.env
 ExecStart=/root/.local/bin/uv run uvicorn app:app --host 127.0.0.1 --port 8200
 Restart=always
 RestartSec=5
