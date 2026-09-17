@@ -118,5 +118,6 @@ def make_node(kind: Optional[str] = None, **kwargs) -> NodeClient:
             kwargs.get("network", os.environ.get("CLN_NETWORK", "regtest"))))
     if kind == "lnd":
         from lnd import LNDNode
-        return LNDNode(**kwargs)
+        allowed = {"rest_url", "cert_path", "macaroon_path"}
+        return LNDNode(**{k: v for k, v in kwargs.items() if k in allowed})
     raise NodeError(f"unknown NODE_BACKEND: {kind!r}")
