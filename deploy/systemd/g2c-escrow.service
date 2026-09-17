@@ -1,0 +1,14 @@
+[Unit]
+Description=g2c escrow service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/root/projects/g2c/escrow
+EnvironmentFile=/etc/g2c/env
+ExecStart=/root/.local/bin/uv run uvicorn app:app --host 127.0.0.1 --port 8100
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -23,7 +23,8 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-DB_PATH = Path(__file__).parent / "data" / "game.db"
+DB_PATH = Path(os.environ.get("DB_PATH")
+               or Path(__file__).parent / "data" / "game.db")
 ESCROW_URL = os.environ.get("ESCROW_URL", "http://localhost:8001")
 SHARED_SECRET = os.environ.get("ESCROW_SHARED_SECRET", "dev-secret")  # set "" to disable
 PAYOUT_MODE = os.environ.get("PAYOUT_MODE", "lab")  # lab | real:
