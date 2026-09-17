@@ -32,6 +32,8 @@ class LNDNode:
                  network: Optional[str] = None):
         self.url = (rest_url or os.environ.get(
             "LND_REST_URL", "https://localhost:8080")).rstrip("/")
+        self.hash_only_failed = False   # kept for interface parity; LND v2
+        #                                    hodl invoices are hash-only ALWAYS
         cert = cert_path or os.environ.get("LND_TLS_CERT")
         if cert and Path(cert).exists():
             self.client = httpx.Client(verify=cert, timeout=60)
@@ -63,40 +65,26 @@ class LNDNode:
         return self._req("GET", "/v1/getinfo")
 
     def create_hold_invoice(self, payment_hash_hex: str, amount_msat: int) -> str:
-        body = {"value_msat": str(amount_msat), "expiry": "3600",
-                "r_hash": _b64(payment_hash_hex)}          # hash-only (preferred)
-        try:
-            res = self._req("POST", "/v1/invoices/hodl", body)
-        except NodeError as e:
-            if "preimage" in str(e).lower() or "hash" in str(e).lower():
-                self.hash_only_failed = True
-                raise NodeError(
-                    "LND_BUILD_NEEDS_PREIMAGE") from e
-            raise
+        """LND v0.21+ invoices v2 API: HASH-ONLY by design — the request
+        takes the hash and there is NO preimage field anywhere until settle
+        time (verified against the v0.21.3 proto and live node)."""
+        res = self._req("POST", "/v2/invoices/hodl",
+                        {"value_msat": str(amount_msat), "expiry": "3600",
+                         "hash": _b64(payment_hash_hex)})
         return res["payment_request"]
 
-    def create_hold_invoice_with_preimage(self, preimage_hex: str,
-                                          amount_msat: int) -> tuple[str, str]:
-        """fallback path: we generate the preimage, node learns it at creation
-        (acceptable on a self-hosted node; weaker than hash-only)."""
-        self.hash_only_failed = True
-        res = self._req("POST", "/v1/invoices/hodl",
-                        {"value_msat": str(amount_msat),
-                         "r_preimage": _b64(preimage_hex)})
-        import hashlib
-        return res["payment_request"], hashlib.sha256(
-            bytes.fromhex(preimage_hex)).hexdigest()
-
     def settle_hold_invoice(self, preimage_hex: str) -> None:
-        self._req("POST", "/v1/invoices/settle", {"preimage": _b64(preimage_hex)})
+        self._req("POST", "/v2/invoices/settle", {"preimage": _b64(preimage_hex)})
 
     def cancel_hold_invoice(self, payment_hash_hex: str) -> None:
-        self._req("POST", "/v1/invoices/cancel",
+        self._req("POST", "/v2/invoices/cancel",
                   {"payment_hash": _b64(payment_hash_hex)})
 
     def hold_invoice_state(self, payment_hash_hex: str) -> Optional[str]:
         try:
-            res = self._req("GET", f"/v1/invoice/{payment_hash_hex}")
+            # LookupInvoiceV2 accepts payment_hash | payment_addr | set_id
+            res = self._req("GET", "/v2/invoices/lookup?payment_hash="
+                            + _b64(payment_hash_hex))
         except NodeError:
             return None
         # OPEN | ACCEPTED | SETTLED | CANCELED
