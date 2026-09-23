@@ -1,0 +1,13 @@
+[Unit]
+Description=LND (g2c escrow node)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/root/go/bin/lnd --lnddir=/root/.lnd
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

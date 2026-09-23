@@ -1,0 +1,12 @@
+[Unit]
+Description=LND wallet unlock (keeps retrying; LND locks on every restart)
+After=lnd.service
+Wants=lnd.service
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'PASS=$(cat /root/.lnd-wallet-pass); B64=$(printf %%s "$PASS" | base64 -w0); for i in $(seq 60); do curl -sk -X POST https://localhost:8080/v1/unlockwallet -d "{\"wallet_password\":\"$B64\"}" -H "Content-Type: application/json" | grep -q "{}" && exit 0; sleep 2; done; exit 1'
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
