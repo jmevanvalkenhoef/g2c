@@ -28,6 +28,8 @@ DB_PATH = Path(os.environ.get("DB_PATH")
 ESCROW_URL = os.environ.get("ESCROW_URL", "http://localhost:8001")
 SHARED_SECRET = os.environ.get("ESCROW_SHARED_SECRET", "dev-secret")  # set "" to disable
 PAYOUT_MODE = os.environ.get("PAYOUT_MODE", "lab")  # lab | real:
+GAME_ADMIN_TOKEN = os.environ.get("GAME_ADMIN_TOKEN", "")  # required for
+# payout edits + world reset when set (mainnet); empty = open (lab/dev)  # lab | real:
 # lab  -> escrow pays the lab's seller node (regtest)
 # real -> escrow resolves the seller's own payout method (lnurl/nwc, signet+)
 
@@ -189,8 +191,10 @@ class SaleResultIn(BaseModel):
 # ---------------------------------------------------------------- GAME API (player-facing)
 
 @app.post("/v1/admin/reset")
-def admin_reset():
+def admin_reset(x_admin_token: str = Header(default="")):
     """dev/demo: wipe and re-seed the world (fresh Alice/Bob + items)"""
+    if GAME_ADMIN_TOKEN and x_admin_token != GAME_ADMIN_TOKEN:
+        raise HTTPException(401, "bad admin token")
     init_db(drop=True)
     return {"status": "reset"}
 
@@ -222,7 +226,11 @@ class ProfileIn(BaseModel):
 
 
 @app.put("/v1/players/me")
-async def update_profile(body: ProfileIn, request: Request, response: Response):
+async def update_profile(body: ProfileIn, request: Request, response: Response,
+                         x_admin_token: str = Header(default="")):
+    # payout methods are money-routing data: edits need the admin token
+    if GAME_ADMIN_TOKEN and x_admin_token != GAME_ADMIN_TOKEN:
+        raise HTTPException(401, "payout edits need the admin token")
     pid = (await require_player(request, response))["id"]
     with tx() as conn:
         conn.execute(

@@ -172,6 +172,8 @@ function openProfile() {
       <input id="lnaddr" type="text" placeholder="satoshi@walletofsatoshi.com" value="${me.ln_address || ''}">
       <label class="meta">…or Nostr Wallet Connect URI</label>
       <input id="nwcuri" type="text" placeholder="nostr+walletconnect://…" value="${me.nwc_uri || ''}">
+      <label class="meta">Admin token (required on live deployments)</label>
+      <input id="admintoken" type="password" placeholder="admin token" value="${localStorage.getItem('g2c_admin_token') || ''}">
       <div style="display:flex;gap:8px">
         <button onclick="saveProfile()">Save</button>
         <button class="ghost" onclick="tab='inv';render()">Cancel</button>
@@ -180,8 +182,12 @@ function openProfile() {
 }
 
 async function saveProfile() {
+  const token = $('#admintoken').value;
+  localStorage.setItem('g2c_admin_token', token);
   try {
-    me = await api('/v1/players/me', {method:'PUT', body: JSON.stringify({
+    me = await api('/v1/players/me', {method:'PUT',
+      headers: token ? {'X-Admin-Token': token} : {},
+      body: JSON.stringify({
       ln_address: $('#lnaddr').value, nwc_uri: $('#nwcuri').value })});
     tab = 'inv'; render();
   } catch (e) { showErr('Save failed: ' + e.message); }
