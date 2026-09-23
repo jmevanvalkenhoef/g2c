@@ -61,14 +61,15 @@ function showErr(msg) {
   setTimeout(() => e.style.display = 'none', 8000);
 }
 window.addEventListener('error', ev => showErr('JS error: ' + ev.message));
+const errText = e => typeof e === 'string' ? e : (e && e.message ? e.message : JSON.stringify(e));
 window.addEventListener('unhandledrejection', ev =>
-  showErr('Async error: ' + (ev.reason && ev.reason.message || ev.reason)));
+  showErr('Async error: ' + errText(ev.reason)));
 
 async function api(path, opts = {}) {
   const pid = sessionStorage.getItem('g2c_player');
   const headers = {'Content-Type':'application/json'};
   if (pid) headers['X-Player-Id'] = pid;
-  const r = await fetch(path, { headers, ...opts });
+  const r = await fetch(path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
   if (r.status === 401) { me = null; render(); throw new Error('unauth'); }
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.detail || r.status);
@@ -190,7 +191,7 @@ async function saveProfile() {
       body: JSON.stringify({
       ln_address: $('#lnaddr').value, nwc_uri: $('#nwcuri').value })});
     tab = 'inv'; render();
-  } catch (e) { showErr('Save failed: ' + e.message); }
+  } catch (e) { showErr('Save failed: ' + errText(e)); }
 }
 
 async function list(id) {
