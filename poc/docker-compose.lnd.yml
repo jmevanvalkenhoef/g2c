@@ -1,0 +1,84 @@
+# LND flavor of the regtest lab: the escrow's node becomes LND (official
+# image, v2 invoices API), buyer + seller stay CLN — cross-implementation.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.lnd.yml up -d --build
+#   ./scripts/setup-lnd.sh
+services:
+  bitcoind:
+    # LND's bitcoind backend needs ZMQ
+    command:
+      -regtest
+      -txindex=1
+      -zmqpubrawblock=tcp://0.0.0.0:28332
+      -zmqpubrawtx=tcp://0.0.0.0:28333
+      -rpcuser=rpcuser
+      -rpcpassword=rpcpass
+      -rpcbind=0.0.0.0
+      -rpcallowip=0.0.0.0/0
+      -fallbackfee=0.0002
+
+  lnd-escrow:
+    image: lightninglabs/lnd:v0.21.3-beta
+    restart: unless-stopped
+    depends_on: [bitcoind]
+    command: >
+      --bitcoin.active
+      --bitcoin.regtest
+      --bitcoin.node=bitcoind
+      --bitcoind.rpchost=bitcoind
+      --bitcoind.rpcuser=rpcuser
+      --bitcoind.rpcpass=rpcpass
+      --bitcoind.zmqpubrawblock=tcp://bitcoind:28332
+      --bitcoind.zmqpubrawtx=tcp://bitcoind:28333
+      --restlisten=0.0.0.0:8080
+      --rpclisten=0.0.0.0:10009
+      --listen=0.0.0.0:9735
+      --tlsextraip=lnd-escrow
+      --tlsextradomain=lnd-escrow
+      --alias=g2c-lnd-escrow
+      --bitcoin.defaultchanconfs=1
+      --minchansize=10000
+    volumes:
+      - lnd-escrow-data:/root/.lnd
+
+  # LND doesn't auto-unlock after restarts; this sidecar unlocks it with the
+  # lab password via REST as soon as it comes up (reuses escrow image code).
+  lnd-unlock:
+    build: ../escrow
+    restart: unless-stopped
+    depends_on: [lnd-escrow]
+    environment:
+      LND_REST_URL: https://lnd-escrow:8080
+      LND_TLS_CERT: /lnd/tls.cert
+      LND_MACAROON: /lnd/data/chain/bitcoin/regtest/admin.macaroon
+      LND_WALLET_PASS: g2clabpass
+    volumes:
+      - lnd-escrow-data:/lnd:ro
+    entrypoint: ["sh", "-c", "while true; do uv run python lnd_admin.py init >/dev/null 2>&1 || true; sleep 15; done"]
+
+  escrow:
+    build: ../escrow
+    depends_on: [lnd-escrow, bitcoind]
+    ports:
+      - "8002:8000"
+    environment:
+      NODE_BACKEND: lnd
+      LND_REST_URL: https://lnd-escrow:8080
+      LND_TLS_CERT: /lnd/tls.cert
+      LND_MACAROON: /lnd/data/chain/bitcoin/regtest/admin.macaroon
+      GAME_URL: http://host.docker.internal:8000
+      ESCROW_SHARED_SECRET: dev-secret
+      FEE_MSAT: "100"
+      LND_WALLET_PASS: g2clabpass
+      LAB_BUYER_HOST: cln-buyer
+      LAB_SELLER_HOST: cln-seller
+    volumes:
+      - escrow-data:/app/data
+      - cln-buyer-data:/sockets/buyer
+      - cln-seller-data:/sockets/seller
+      - lnd-escrow-data:/lnd:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  lnd-escrow-data:

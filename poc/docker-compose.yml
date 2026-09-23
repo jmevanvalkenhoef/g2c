@@ -52,6 +52,7 @@ services:
       --bitcoin-rpcuser=rpcuser
       --bitcoin-rpcpassword=rpcpass
       --funding-confirms=1
+      --bind-addr=0.0.0.0:9735
       --important-plugin=/usr/local/bin/hold
       --hold-database=sqlite:///root/.lightning/hold.db
       --log-level=info
@@ -72,6 +73,7 @@ services:
       --bitcoin-rpcuser=rpcuser
       --bitcoin-rpcpassword=rpcpass
       --funding-confirms=1
+      --bind-addr=0.0.0.0:9735
       --log-level=info
     volumes:
       - cln-buyer-data:/root/.lightning
@@ -90,6 +92,7 @@ services:
       --bitcoin-rpcuser=rpcuser
       --bitcoin-rpcpassword=rpcpass
       --funding-confirms=1
+      --bind-addr=0.0.0.0:9735
       --log-level=info
     volumes:
       - cln-seller-data:/root/.lightning

@@ -29,6 +29,9 @@ class NodeClient(Protocol):
     def decode_invoice(self, bolt11: str) -> dict: ...
     # lab profile (deterministic seller invoices)
     def create_invoice(self, amount_msat: int, label: str, desc: str) -> tuple[str, str]: ...
+    def connect_peer(self, node_id: str, host: str) -> None:
+        self.node.call("connect", [f"{node_id}@{host}"])
+
     def find_invoice_by_label(self, label: str) -> Optional[dict]: ...
 
 
@@ -93,6 +96,9 @@ class CLNNode:
     def create_invoice(self, amount_msat: int, label: str, desc: str) -> tuple[str, str]:
         inv = self.node.call("invoice", [amount_msat, label, desc])
         return inv["bolt11"], inv["payment_hash"]
+
+    def connect_peer(self, node_id: str, host: str) -> None:
+        self.node.call("connect", [f"{node_id}@{host}"])
 
     def find_invoice_by_label(self, label: str) -> Optional[dict]:
         res = self.node.call("listinvoices", {"label": label})

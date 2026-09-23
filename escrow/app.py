@@ -64,10 +64,11 @@ CLN_NETWORK = os.environ.get("CLN_NETWORK", "regtest")  # lab: regtest
 # speak the backend; the lab's buyer/seller helper nodes are always CLN.
 ESCROW_NODE = make_node(lightning_dir=os.environ.get("ESCROW_NODE_DIR", "/sockets/escrow"),
                         network=CLN_NETWORK)
-# lab helper nodes (always CLN in the lab topology)
-BUYER_NODE = make_node(lightning_dir=os.environ.get("BUYER_NODE_DIR", "/sockets/buyer"),
+# lab helper nodes (always CLN in the lab topology, regardless of the
+# escrow's own NODE_BACKEND)
+BUYER_NODE = make_node("cln", lightning_dir=os.environ.get("BUYER_NODE_DIR", "/sockets/buyer"),
                        network=CLN_NETWORK)
-SELLER_NODE = make_node(lightning_dir=os.environ.get("SELLER_NODE_DIR", "/sockets/seller"),
+SELLER_NODE = make_node("cln", lightning_dir=os.environ.get("SELLER_NODE_DIR", "/sockets/seller"),
                         network=CLN_NETWORK)
 
 RESOLVER = PayoutResolver(seller_node=SELLER_NODE, escrow_node=ESCROW_NODE)
@@ -333,6 +334,16 @@ async def drive(sale: dict) -> None:
             set_state(sid, "ROLLING_BACK", f"seller payment failed x{attempts}")
         else:
             print(f"[escrow] payout attempt {attempts} not ok: {detail}")
+            seller_host = os.environ.get("LAB_SELLER_HOST")
+            if seller_host and hasattr(ESCROW_NODE, "connect_peer"):
+                try:                  # peers drop across lab restarts
+                    def _repeer():
+                        sid_ = SELLER_NODE.get_info()["id"]
+                        ESCROW_NODE.connect_peer(sid_, seller_host)
+                    await asyncio.to_thread(_repeer)
+                    print(f"[escrow] re-peered seller via {seller_host}")
+                except Exception as e:
+                    print(f"[escrow] seller re-peer failed: {e}")
         return
 
     if state == "SETTLING":
@@ -475,9 +486,20 @@ async def demo_pay(sale_id: str, x_escrow_secret: str = Header(default="")):
                     cln_pay_ok, BUYER_NODE, sale["payment_request"], 8)
             except Exception:
                 status = "error"
-            if "Unknown" not in status and "Could not find" not in status:
+            ok = status in ("complete", "pending") or status.startswith("payment submitted")
+            if ok:
                 return
             print(f"[escrow] buyer pay retry {attempt+1}: {status}")
+            buyer_host = os.environ.get("LAB_BUYER_HOST")
+            if buyer_host and hasattr(ESCROW_NODE, "connect_peer"):
+                try:                      # peers drop across lab restarts
+                    def _repeer():
+                        bid = BUYER_NODE.get_info()["id"]
+                        ESCROW_NODE.connect_peer(bid, buyer_host)
+                    await asyncio.to_thread(_repeer)
+                    print(f"[escrow] re-peered buyer via {buyer_host}")
+                except Exception as e:
+                    print(f"[escrow] re-peer failed: {e}")
             await asyncio.sleep(5)
 
     asyncio.create_task(_bg_pay())

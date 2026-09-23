@@ -15,7 +15,9 @@ PASS=0; FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "  ok: $1"; else FAIL=$((FAIL+1)); echo "  FAIL: $1 (expected '$2', got '$3')"; fi; }
 
 ESC=http://localhost:8002
-FAULTS="-f docker-compose.yml -f docker-compose.faults.yml"
+# LAB_FLAVOR=lnd adds the LND flavor override (escrow stays LND-backed)
+FLAVOR="${LAB_FLAVOR:+-f docker-compose.$LAB_FLAVOR.yml}"
+FAULTS="-f docker-compose.yml $FLAVOR -f docker-compose.faults.yml"
 
 rewire_escrow() {  # point escrow at mock-game (once)
   docker compose $FAULTS up -d --force-recreate escrow > /dev/null 2>&1
@@ -26,7 +28,7 @@ set_fault() {  # recreate ONLY mock-game with the given FAULT_MODE
   FAULT_MODE=$1 docker compose $FAULTS up -d --force-recreate mock-game > /dev/null 2>&1
   sleep 2
 }
-restore() { docker compose up -d escrow mock-game > /dev/null 2>&1; }
+restore() { docker compose $FLAVOR up -d --force-recreate escrow > /dev/null 2>&1; docker compose $FLAVOR up -d mock-game > /dev/null 2>&1; }
 trap restore EXIT
 
 new_sale() {

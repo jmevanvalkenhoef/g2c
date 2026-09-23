@@ -44,6 +44,10 @@ wait_purchase() {  # wait_purchase <payment_hash> <state>  -> prints final state
 }
 
 echo "== booting ($([ "$REAL" = "--real" ] && echo REAL escrow || echo stub)) =="
+if [ "${GAME_PREBOOTED:-0}" = "1" ]; then
+  curl -sf localhost:$GAME/v1/items > /dev/null || { echo "no prebooted game on :$GAME"; exit 1; }
+  curl -sf -X POST localhost:$GAME/v1/admin/reset > /dev/null && echo "  using prebooted game (world reset)"
+else
 pkill -f "[u]vicorn app:app" 2>/dev/null || true; sleep 1
 if [ "$REAL" = "--real" ]; then
   for i in $(seq 30); do
@@ -57,8 +61,12 @@ else
 fi
 ESCROW_URL=http://localhost:$ESCROW uv run --project game-backend \
   uvicorn app:app --host 0.0.0.0 --port $GAME --app-dir game-backend > /tmp/g2c_game.log 2>&1 &
-sleep 4
+for i in $(seq 30); do
+  sleep 2
+  curl -sf localhost:$GAME/v1/items > /dev/null && break
+done
 curl -sf localhost:$GAME/v1/items > /dev/null || { echo "game failed to boot"; tail /tmp/g2c_game.log; exit 1; }
+fi
 
 g()  { curl -s "localhost:$GAME$1" -H "X-Player-Id: $2" "${@:3}"; }
 gs() { curl -s "localhost:$GAME$1" -H "X-Escrow-Secret: dev-secret" "${@:3}"; }
@@ -106,8 +114,14 @@ check "second simulate-pay is a no-op" "completed" \
 # real mode: money actually moved correctly on-chain of Lightning
 if [ "$REAL" = "--real" ]; then
   echo "== real-money checks =="
-  BUYER_PAY=$(cd ../poc && docker compose exec -T cln-buyer lightning-cli --regtest listpays 2>/dev/null | \
-    python3 -c "import json,sys; pays=[p for p in json.load(sys.stdin)['pays'] if p['payment_hash'].startswith('$PH'[:8])]; print(pays[-1]['status'] if pays else 'none')" 2>/dev/null || echo "?")
+  # multi-attempt payments: any 'complete' entry counts (poll for bookkeeping lag)
+  BUYER_PAY="none"
+  for i in $(seq 30); do
+    BUYER_PAY=$(cd ../poc && docker compose exec -T cln-buyer lightning-cli --regtest listpays 2>/dev/null | \
+      python3 -c "import json,sys; pays=[p for p in json.load(sys.stdin)['pays'] if p['payment_hash'].startswith('$PH'[:12])]; print('complete' if any(p['status']=='complete' for p in pays) else (pays[-1]['status'] if pays else 'none'))" 2>/dev/null || echo "?")
+    [ "$BUYER_PAY" = "complete" ] && break
+    sleep 1
+  done
   check "buyer payment completed" "complete" "$BUYER_PAY"
 fi
 

@@ -82,9 +82,12 @@ class LNDNode:
 
     def hold_invoice_state(self, payment_hash_hex: str) -> Optional[str]:
         try:
-            # LookupInvoiceV2 accepts payment_hash | payment_addr | set_id
+            # LookupInvoiceV2 accepts payment_hash | payment_addr | set_id.
+            # Query params need URL-encoding: raw base64 padding ('=') and
+            # '+' are rejected by grpc-gateway ("illegal base64 data").
+            from urllib.parse import quote
             res = self._req("GET", "/v2/invoices/lookup?payment_hash="
-                            + _b64(payment_hash_hex))
+                            + quote(_b64(payment_hash_hex), safe=""))
         except NodeError:
             return None
         # OPEN | ACCEPTED | SETTLED | CANCELED
@@ -92,20 +95,33 @@ class LNDNode:
                 "CANCELED": "cancelled"}.get(res.get("state"))
 
     def pay_invoice(self, bolt11: str, timeout_s: int) -> tuple[bool, str]:
+        """LND 0.21+: POST /v2/router/payments (streaming RPC -> the REST
+        gateway returns the full stream as a JSON array; take the last)."""
         try:
-            res = self._req("POST", "/v1/channels/transactions",
-                            {"payment_request": bolt11,
-                             "timeout_seconds": int(timeout_s),
-                             "fee_limit": {"fixed": "100000"}},
-                            timeout=timeout_s + 15)
-        except NodeError as e:
-            return False, str(e)
-        err = res.get("payment_error", "")
-        if err:
-            return False, err
-        if res.get("status") == "IN_FLIGHT":
-            return False, "pending"
-        return True, "complete"
+            r = self.client.request(
+                "POST", self.url + "/v2/router/send",
+                json={"payment_request": bolt11,
+                      "timeout_seconds": int(timeout_s),
+                      "fee_limit_msat": "1000000",
+                      "no_inflight_updates": True},
+                headers=self.headers, timeout=timeout_s + 15)
+            if r.status_code >= 400:
+                return False, f"lnd pay -> {r.status_code}: {r.text[:150]}"
+            res = r.json()
+            if isinstance(res, list):
+                res = res[-1] if res else {}
+            # LND's REST stream wraps each message: {"result": {...}}
+            if isinstance(res, dict) and "result" in res and isinstance(res["result"], dict):
+                res = res["result"]
+            status = res.get("status", "")
+            if status == "SUCCEEDED":
+                return True, "complete"
+            if status == "IN_FLIGHT":
+                return False, "pending"
+            reason = res.get("failure_reason", "") or status or "unknown"
+            return False, f"pay failed: {reason}"
+        except httpx.HTTPError as e:
+            return False, f"lnd unreachable: {e}"
 
     def payment_state(self, payment_hash_hex: str) -> Optional[str]:
         try:
@@ -165,8 +181,8 @@ class LNDNode:
             return False
 
     def new_address(self) -> str:
-        return self._req("POST", "/v1/newaddress",
-                         {"type": "WITNESS_PUBKEY_HASH"})["address"]
+        # GET with query param (POST returns 501 on 0.21.x)
+        return self._req("GET", "/v1/newaddress?type=0")["address"]
 
     def connect_peer(self, node_id: str, host: str) -> None:
         try:

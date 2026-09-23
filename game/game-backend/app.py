@@ -65,8 +65,11 @@ def tx():
         conn.close()
 
 
-def init_db() -> None:
+def init_db(drop: bool = False) -> None:
     # It's a demo: every start begins from the hardcoded Alice/Bob seed.
+    if drop:
+        for suffix in ("", "-wal", "-shm"):
+            Path(str(DB_PATH) + suffix).unlink(missing_ok=True)
     # No persisted state, no migrations, no stale in-flight rows.
     for suffix in ("", "-wal", "-shm"):
         Path(str(DB_PATH) + suffix).unlink(missing_ok=True)
@@ -184,6 +187,13 @@ class SaleResultIn(BaseModel):
 
 
 # ---------------------------------------------------------------- GAME API (player-facing)
+
+@app.post("/v1/admin/reset")
+def admin_reset():
+    """dev/demo: wipe and re-seed the world (fresh Alice/Bob + items)"""
+    init_db(drop=True)
+    return {"status": "reset"}
+
 
 @app.post("/v1/players")
 def create_player(body: PlayerIn, response: Response):
