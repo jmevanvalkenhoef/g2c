@@ -68,6 +68,7 @@ services:
       LND_MACAROON: /lnd/data/chain/bitcoin/regtest/admin.macaroon
       GAME_URL: http://host.docker.internal:8000
       ESCROW_SHARED_SECRET: dev-secret
+      LAB_MODE: "1"
       FEE_MSAT: "100"
       LND_WALLET_PASS: g2clabpass
       LAB_BUYER_HOST: cln-buyer

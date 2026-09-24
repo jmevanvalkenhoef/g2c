@@ -1,32 +1,27 @@
-"""g2c real escrow service — same contract as the stub, real Lightning inside.
+"""g2c escrow service — hold-invoice escrow over Lightning (LND backend).
 
 API surface (identical to escrow-stub, so the game swaps by ESCROW_URL):
   POST /v1/sales            -> 201 {sale_id, payment_request, payment_hash,
                                     expires_at, fee_msat, seller_amount_msat}
   GET  /v1/sales/{sale_id}  -> {sale_id, payment_hash, state, failure_reason}
-  POST /v1/sales/{id}/pay   -> DEMO bridge: instruct the lab's cln-buyer node
-                               to pay the invoice (stands in for the buyer's
-                               wallet; the PWA's QR tap reaches this via the
-                               game's simulate-pay endpoint)
+  POST /v1/sales/{id}/pay   -> lab demo bridge only (LAB_MODE=1 + DEMO_BRIDGE);
+                               on production the buyer's real wallet pays the
+                               QR and the HTLC's arrival is the trigger
   POST /v1/sales/{id}/fail  -> debug: force the seller-payout leg to fail
 
-State machine (spec §4), persisted in SQLite, driven by a reconcile loop:
+Money flow: hold invoice created HASH-ONLY at the node (LND v2 invoices API —
+the node cannot settle without our preimage) -> HTLC arrival detected ->
+item transfers at the game (idempotent, keyed on payment_hash) -> seller
+payout (PayoutResolver: lnurl/nwc; resolved invoice persisted BEFORE paying,
+recovered by payment hash after crashes) -> settle. Any failure before the
+payout: rollback + cancel = buyer auto-refunded by Lightning itself.
 
-  AWAITING_PAYMENT -> HTLC_HELD -> EXECUTING -> PAYING_SELLER -> SETTLING
-  -> COMPLETED
-  ...or CANCELLING/ROLLING_BACK -> CANCELLED (buyer auto-refunded by Lightning)
+Crash recovery: every non-terminal sale is re-driven by the reconcile loop;
+all steps idempotent. All node/network calls run in threads so a slow leg
+never stalls the API or other sales.
 
-What replaced the stub's theater:
-  payment_request  <- real BOLT11 from holdinvoice(hash, msat)   [hash-only!]
-  HTLC arrival     <- polling listholdinvoices until state=accepted
-  pay seller       <- invoice on the lab's cln-seller node, paid from our node
-  settle           <- settleholdinvoice(preimage)
-  cancel           <- cancelholdinvoice (refund happens on Lightning)
-
-Crash recovery: every non-terminal sale is re-driven by the same loop on
-restart; each step is idempotent (game mutations keyed on payment_hash,
-settle/cancel are safe to repeat, seller payout verified via its own
-payment hash before settling).
+LAB_MODE=1 loads lab.py (regtest helpers: demo pay bridge, CLN buyer/seller
+stand-ins, peer re-healing). Production never sets it.
 """
 import asyncio
 import os
@@ -43,10 +38,8 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from cln import CLN, CLNError
 from node import make_node, NodeError
 from payout import PayoutResolver, PayoutError
-from node import make_node  # noqa: F811 (single import)
 
 GAME_URL = os.environ.get("GAME_URL", "http://localhost:8000")
 SHARED_SECRET = os.environ.get("ESCROW_SHARED_SECRET", "dev-secret")
@@ -59,19 +52,15 @@ DEMO_BRIDGE = os.environ.get("DEMO_BRIDGE", "1") == "1"   # 0 on signet: real
 #                                                          wallets pay the QR,
 #                                                          the tap does nothing
 
-CLN_NETWORK = os.environ.get("CLN_NETWORK", "regtest")  # lab: regtest
-# NODE_BACKEND=cln|lnd (env). The escrow's own node is the only one that must
-# speak the backend; the lab's buyer/seller helper nodes are always CLN.
-ESCROW_NODE = make_node(lightning_dir=os.environ.get("ESCROW_NODE_DIR", "/sockets/escrow"),
-                        network=CLN_NETWORK)
-# lab helper nodes (always CLN in the lab topology, regardless of the
-# escrow's own NODE_BACKEND)
-BUYER_NODE = make_node("cln", lightning_dir=os.environ.get("BUYER_NODE_DIR", "/sockets/buyer"),
-                       network=CLN_NETWORK)
-SELLER_NODE = make_node("cln", lightning_dir=os.environ.get("SELLER_NODE_DIR", "/sockets/seller"),
-                        network=CLN_NETWORK)
+# the escrow's own node (NODE_BACKEND=cln for lab flavors, lnd on the VPS)
+ESCROW_NODE = make_node()
 
-RESOLVER = PayoutResolver(seller_node=SELLER_NODE, escrow_node=ESCROW_NODE)
+LAB_MODE = os.environ.get("LAB_MODE", "0") == "1"
+if LAB_MODE:
+    import lab                                  # regtest helpers only
+    RESOLVER = PayoutResolver(seller_node=lab.SELLER_NODE, escrow_node=ESCROW_NODE)
+else:
+    RESOLVER = PayoutResolver(seller_node=None, escrow_node=ESCROW_NODE)
 
 DB_PATH = Path(os.environ.get("DB_PATH", Path(__file__).parent / "data" / "escrow.db"))
 
@@ -224,17 +213,9 @@ def hold_state(payment_hash: str) -> Optional[str]:
     return ESCROW_NODE.hold_invoice_state(payment_hash)
 
 
-def cln_pay_ok(node, bolt11: str, retry_for: int = 30) -> tuple[bool, str]:
-    """Pay an invoice from a NodeClient/CLN node. Returns (done, status)."""
-    pay = getattr(node, "pay_invoice", None)
-    if pay:                                   # NodeClient interface
-        return pay(bolt11, retry_for)
-    try:                                      # raw CLN (lab helper nodes)
-        res = node.call("pay", {"bolt11": bolt11, "retry_for": retry_for})
-        status = res.get("status", "pending")
-    except CLNError as e:
-        return False, str(e)
-    return status == "complete", status
+def pay_ok(bolt11: str, retry_for: int = 15) -> tuple[bool, str]:
+    """Pay an invoice from the escrow's node. Returns (done, status)."""
+    return ESCROW_NODE.pay_invoice(bolt11, retry_for)
 
 
 def seller_payout(sale: dict) -> tuple[bool, Optional[str], str]:
@@ -257,7 +238,7 @@ def seller_payout(sale: dict) -> tuple[bool, Optional[str], str]:
             conn.execute(
                 "UPDATE sales SET seller_bolt11=?, seller_pay_hash=? "
                 "WHERE sale_id=?", (bolt11, pay_hash, sale["sale_id"]))
-    ok, status = cln_pay_ok(ESCROW_NODE, bolt11, retry_for=15)
+    ok, status = pay_ok(bolt11, retry_for=15)
     return ok, pay_hash, status
 
 
@@ -326,8 +307,6 @@ async def drive(sale: dict) -> None:
             set_state(sid, "SETTLING")
             return
         ok, pay_hash, detail = await asyncio.to_thread(seller_payout, sale)
-        if pay_hash:
-            save_field(sid, "seller_pay_hash", pay_hash)
         if ok:
             set_state(sid, "SETTLING")
             return
@@ -337,16 +316,8 @@ async def drive(sale: dict) -> None:
             set_state(sid, "ROLLING_BACK", f"seller payment failed x{attempts}")
         else:
             print(f"[escrow] payout attempt {attempts} not ok: {detail}")
-            seller_host = os.environ.get("LAB_SELLER_HOST")
-            if seller_host and hasattr(ESCROW_NODE, "connect_peer"):
-                try:                  # peers drop across lab restarts
-                    def _repeer():
-                        sid_ = SELLER_NODE.get_info()["id"]
-                        ESCROW_NODE.connect_peer(sid_, seller_host)
-                    await asyncio.to_thread(_repeer)
-                    print(f"[escrow] re-peered seller via {seller_host}")
-                except Exception as e:
-                    print(f"[escrow] seller re-peer failed: {e}")
+            if LAB_MODE:               # lab peers drop across restarts
+                await lab.repeer_seller(ESCROW_NODE)
         return
 
     if state == "SETTLING":
@@ -475,35 +446,11 @@ async def demo_pay(sale_id: str, x_escrow_secret: str = Header(default="")):
         return {"status": "awaiting real wallet payment — scan the QR with "
                           "your Lightning wallet (signet profile)"}
 
-    # fire-and-forget: the buyer-node payment runs in the background; the
-    # reconcile loop detects the arriving HTLC on its own, so the HTTP
-    # response doesn't need to wait for `pay` (which blocks ~10s while the
-    # HTLC is held). Guarded against double-fire by state check above.
-    async def _bg_pay():
-        for attempt in range(3):
-            try:
-                _, status = await asyncio.to_thread(
-                    cln_pay_ok, BUYER_NODE, sale["payment_request"], 8)
-            except Exception:
-                status = "error"
-            ok = status in ("complete", "pending") or status.startswith("payment submitted")
-            if ok:
-                return
-            print(f"[escrow] buyer pay retry {attempt+1}: {status}")
-            buyer_host = os.environ.get("LAB_BUYER_HOST")
-            if buyer_host and hasattr(ESCROW_NODE, "connect_peer"):
-                try:                      # peers drop across lab restarts
-                    def _repeer():
-                        bid = BUYER_NODE.get_info()["id"]
-                        ESCROW_NODE.connect_peer(bid, buyer_host)
-                    await asyncio.to_thread(_repeer)
-                    print(f"[escrow] re-peered buyer via {buyer_host}")
-                except Exception as e:
-                    print(f"[escrow] re-peer failed: {e}")
-            await asyncio.sleep(5)
-
-    asyncio.create_task(_bg_pay())
-    return {"status": "payment submitted"}
+    if LAB_MODE and DEMO_BRIDGE:
+        await lab.demo_pay(ESCROW_NODE, sale)
+        return {"status": "payment submitted"}
+    return {"status": "awaiting real wallet payment — scan the QR with "
+                      "your Lightning wallet"}
 
 
 @app.post("/v1/sales/{sale_id}/fail")

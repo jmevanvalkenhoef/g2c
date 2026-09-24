@@ -8,7 +8,6 @@ so on a self-hosted node this stays within spec §2's accepted trade-off).
 """
 import base64
 import os
-import ssl
 from pathlib import Path
 from typing import Optional
 
@@ -21,10 +20,6 @@ def _b64(hexstr: str) -> str:
     return base64.b64encode(bytes.fromhex(hexstr)).decode()
 
 
-def _unb64(s: str) -> bytes:
-    return base64.b64decode(s)
-
-
 class LNDNode:
     def __init__(self, rest_url: Optional[str] = None,
                  cert_path: Optional[str] = None,
@@ -32,8 +27,6 @@ class LNDNode:
                  network: Optional[str] = None):
         self.url = (rest_url or os.environ.get(
             "LND_REST_URL", "https://localhost:8080")).rstrip("/")
-        self.hash_only_failed = False   # kept for interface parity; LND v2
-        #                                    hodl invoices are hash-only ALWAYS
         cert = cert_path or os.environ.get("LND_TLS_CERT")
         if cert and Path(cert).exists():
             self.client = httpx.Client(verify=cert, timeout=60)
@@ -44,7 +37,6 @@ class LNDNode:
         mac = macaroon_path or os.environ.get("LND_MACAROON")
         if mac and Path(mac).exists():
             self.headers["Grpc-Metadata-macaroon"] = Path(mac).read_bytes().hex()
-        self.hash_only_failed = False
 
     # -------------------------------------------------------------- plumbing
 
@@ -202,7 +194,4 @@ class LNDNode:
                          "push_sat": str(push_sat),
                          "private": private, "min_confs": 1},
                         timeout=60)
-        txid = _unb64(res["funding_txid_str"] if "funding_txid_str" in res
-                      else res["funding_txid"]).hex() \
-            if res.get("funding_txid", "").replace("-", "") else res.get("funding_txid_str", "")
-        return res.get("funding_txid_str") or txid
+        return res.get("funding_txid_str") or res.get("funding_txid", "")

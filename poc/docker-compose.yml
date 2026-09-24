@@ -107,6 +107,7 @@ services:
     environment:
       GAME_URL: http://host.docker.internal:8000   # game backend runs on the host
       ESCROW_SHARED_SECRET: dev-secret
+      LAB_MODE: "1"
       FEE_MSAT: "100"
     volumes:
       - escrow-data:/app/data

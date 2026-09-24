@@ -17,9 +17,6 @@ from urllib.parse import urlparse
 
 import httpx
 
-from cln import CLN, CLNError
-
-
 class PayoutError(RuntimeError):
     pass
 
@@ -74,9 +71,8 @@ def verify_invoice(node, bolt11: str, expect_msat: int) -> str:
 class PayoutResolver:
     """Dispatch on seller_payout['type']. Returns (bolt11, payment_hash)."""
 
-    def __init__(self, seller_node: Optional[CLN] = None,
-                 escrow_node: Optional[CLN] = None):
-        self.seller_node = seller_node   # lab profile only
+    def __init__(self, seller_node=None, escrow_node=None):
+        self.seller_node = seller_node   # lab profile only (None in prod)
         self.escrow_node = escrow_node
 
     def resolve(self, payout: dict, sale: dict) -> tuple[str, str]:
@@ -101,6 +97,8 @@ class PayoutResolver:
         raise PayoutError(f"unknown payout type: {ptype!r}")
 
     def _lab(self, sale: dict) -> tuple[str, str]:
+        if self.seller_node is None:
+            raise PayoutError("lab payout profile unavailable (LAB_MODE off)")
         label = f"g2c-{sale['sale_id']}"
         found = self.seller_node.find_invoice_by_label(label)
         if found:                            # deterministic label: recover the
