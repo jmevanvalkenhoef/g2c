@@ -63,7 +63,7 @@ function showErr(msg) {
 window.addEventListener('error', ev => showErr('JS error: ' + ev.message));
 const errText = e => typeof e === 'string' ? e : (e && e.message ? e.message : JSON.stringify(e));
 window.addEventListener('unhandledrejection', ev =>
-  showErr('Async error: ' + errText(ev.reason));
+  showErr('Async error: ' + errText(ev.reason)));
 
 async function api(path, opts = {}) {
   const pid = sessionStorage.getItem('g2c_player');
