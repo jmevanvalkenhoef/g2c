@@ -313,7 +313,12 @@ async def purchase(body: PurchaseIn, request: Request, response: Response):
             (row["seller_id"],)).fetchone()
         conn.execute(
             "UPDATE listings SET status='in_flight' WHERE id=?", (body.listing_id,))
-    if PAYOUT_MODE == "real" and seller and (seller["ln_address"] or seller["nwc_uri"]):
+    if PAYOUT_MODE == "real":
+        if not (seller and (seller["ln_address"] or seller["nwc_uri"])):
+            with tx() as c2:      # reopen the listing before refusing
+                c2.execute("UPDATE listings SET status='open' WHERE id=?",
+                           (body.listing_id,))
+            raise HTTPException(422, "seller has no payout method configured")
         seller_payout = ({"type": "lnurl", "target": seller["ln_address"]}
                          if seller["ln_address"] else
                          {"type": "nwc", "target": seller["nwc_uri"]})

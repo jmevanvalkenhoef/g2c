@@ -64,12 +64,14 @@ class LNDNode:
     def get_info(self) -> dict:
         return self._req("GET", "/v1/getinfo")
 
-    def create_hold_invoice(self, payment_hash_hex: str, amount_msat: int) -> str:
+    def create_hold_invoice(self, payment_hash_hex: str, amount_msat: int,
+                            expiry_s: int = 3600) -> str:
         """LND v0.21+ invoices v2 API: HASH-ONLY by design — the request
         takes the hash and there is NO preimage field anywhere until settle
         time (verified against the v0.21.3 proto and live node)."""
         res = self._req("POST", "/v2/invoices/hodl",
-                        {"value_msat": str(amount_msat), "expiry": "3600",
+                        {"value_msat": str(amount_msat),
+                         "expiry": str(expiry_s),
                          "hash": _b64(payment_hash_hex)})
         return res["payment_request"]
 

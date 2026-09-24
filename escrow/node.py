@@ -20,7 +20,8 @@ class NodeError(RuntimeError):
 
 class NodeClient(Protocol):
     def get_info(self) -> dict: ...
-    def create_hold_invoice(self, payment_hash_hex: str, amount_msat: int) -> str: ...
+    def create_hold_invoice(self, payment_hash_hex: str, amount_msat: int,
+                            expiry_s: int = 3600) -> str: ...
     def settle_hold_invoice(self, preimage_hex: str) -> None: ...
     def cancel_hold_invoice(self, payment_hash_hex: str) -> None: ...
     def hold_invoice_state(self, payment_hash_hex: str) -> Optional[str]: ...
@@ -49,8 +50,10 @@ class CLNNode:
     def get_info(self) -> dict:
         return self.node.call("getinfo")
 
-    def create_hold_invoice(self, payment_hash_hex: str, amount_msat: int) -> str:
+    def create_hold_invoice(self, payment_hash_hex: str, amount_msat: int,
+                            expiry_s: int = 3600) -> str:
         # hash-only creation: the node never sees the preimage
+        # (expiry_s ignored: the CLN plugin takes none)
         inv = self.node.call("holdinvoice", [payment_hash_hex, amount_msat])
         return inv["bolt11"]
 

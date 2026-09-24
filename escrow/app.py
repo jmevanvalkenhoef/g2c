@@ -273,7 +273,8 @@ def payout_verified(sale: dict) -> bool:
 async def cancel_and_close(sale: dict, reason: str) -> None:
     set_state(sale["sale_id"], "CANCELLING", reason)
     try:
-        ESCROW_NODE.cancel_hold_invoice(sale["payment_hash"])
+        await asyncio.to_thread(ESCROW_NODE.cancel_hold_invoice,
+                                sale["payment_hash"])
     except NodeError as e:
         print(f"[escrow] cancel invoice: {e}")
     set_state(sale["sale_id"], "CANCELLED", reason)
@@ -285,7 +286,9 @@ async def drive(sale: dict) -> None:
     sid, state = sale["sale_id"], sale["state"]
 
     if state == "AWAITING_PAYMENT":
-        inv = hold_state(sid and sale["payment_hash"])
+        # all node/network calls run in threads: a slow leg (LNURL, NWC
+        # relay, LND pay) must never stall the API or other sales
+        inv = await asyncio.to_thread(hold_state, sale["payment_hash"])
         exp = datetime.fromisoformat(sale["expires_at"])
         if inv == "accepted":
             set_state(sid, "HTLC_HELD")
@@ -319,10 +322,10 @@ async def drive(sale: dict) -> None:
         if sale["force_fail"]:
             set_state(sid, "ROLLING_BACK", "forced failure (debug)")
             return
-        if payout_verified(sale):   # crash-recovery path
+        if await asyncio.to_thread(payout_verified, sale):  # crash recovery
             set_state(sid, "SETTLING")
             return
-        ok, pay_hash, detail = seller_payout(sale)
+        ok, pay_hash, detail = await asyncio.to_thread(seller_payout, sale)
         if pay_hash:
             save_field(sid, "seller_pay_hash", pay_hash)
         if ok:
@@ -349,7 +352,8 @@ async def drive(sale: dict) -> None:
     if state == "SETTLING":
         # NEVER rollback after a successful seller payment: settle is ours to keep retrying
         try:
-            ESCROW_NODE.settle_hold_invoice(sale["preimage"])
+            await asyncio.to_thread(ESCROW_NODE.settle_hold_invoice,
+                                    sale["preimage"])
             set_state(sid, "COMPLETED")
             await notify_game(sale["payment_hash"], "completed")
         except NodeError as e:
@@ -416,15 +420,11 @@ async def create_sale(body: SaleIn, x_escrow_secret: str = Header(default="")):
     sale_id = secrets.token_hex(6)
     try:
         # hash-only creation: the node cannot settle without our preimage
-        bolt11 = ESCROW_NODE.create_hold_invoice(payment_hash, body.amount_msat)
+        bolt11 = await asyncio.to_thread(
+            ESCROW_NODE.create_hold_invoice, payment_hash,
+            body.amount_msat, INVOICE_EXPIRY_S)
     except NodeError as e:
-        if "LND_BUILD_NEEDS_PREIMAGE" in str(e):
-            # fallback: generate preimage first, node learns it at creation
-            # (acceptable on self-hosted nodes; spec §2 trade-off)
-            bolt11, payment_hash = ESCROW_NODE.create_hold_invoice_with_preimage(
-                preimage, body.amount_msat)
-        else:
-            raise HTTPException(502, f"holdinvoice failed: {e}")
+        raise HTTPException(502, f"holdinvoice failed: {e}")
     expires_at = (datetime.now(timezone.utc)
                   + timedelta(seconds=INVOICE_EXPIRY_S)).isoformat()
     with tx() as conn:
