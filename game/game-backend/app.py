@@ -261,6 +261,11 @@ def items():
 async def create_listing(body: ListingIn, request: Request, response: Response):
     seller = (await require_player(request, response))["id"]
     with tx() as conn:
+        # purge old listing rows for this item (completed/cancelled) so the
+        # UNIQUE(item_id) constraint allows re-listing for back-and-forth trades
+        conn.execute(
+            "DELETE FROM listings WHERE item_id=? AND status IN ('completed','cancelled')",
+            (body.item_id,))
         cur = conn.execute(
             """INSERT INTO listings(item_id, seller_id, price_msat)
                SELECT ?, owner_id, ? FROM items
