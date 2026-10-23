@@ -45,16 +45,16 @@ GAME_ADMIN_TOKEN = os.environ.get("GAME_ADMIN_TOKEN", "")  # required for the
 # listing held until that invoice can no longer be paid, then reopen it
 AMBIGUOUS_HOLD_S = int(os.environ.get("AMBIGUOUS_HOLD_S", "900"))
 
-# Aetherbound demo cards (the web app maps each name to its art, rarity and
-# element); seeded alice gets the even-indexed five, bob the odd, and every new
-# character receives STARTER_CARDS of them at random
+# demo items (the web app maps each name to its icon and rarity); seeded alice
+# gets the even-indexed five, bob the odd, and every new character receives
+# STARTER_ITEMS of them at random
 ARCHETYPES = [
-    "Ember Drake", "Frostbound Sentinel", "Moonlit Oracle", "Thornwood Druid",
-    "Voidcaller Lich", "Sunforged Paladin", "Stormglass Familiar", "Phoenix Feather",
-    "Runebound Golem", "Whispering Grimoire",
+    "Rusty Sword", "Iron Shield", "Healing Potion", "Elixir of Speed",
+    "Wizard Hat", "Leather Boots", "Enchanted Bow", "Bag of Holding",
+    "Dragon Scale", "Mysterious Key",
 ]
 
-STARTER_CARDS = 5
+STARTER_ITEMS = 5
 ROLES = ("archmage", "runeknight", "ranger")
 LNADDR_RE = re.compile(r"^[\w.\-+]+@[\w.\-]+(\.[\w\-]+)+$")
 PLAYER_COLS = "id, name, role, ln_address, nwc_uri"
@@ -252,8 +252,8 @@ def admin_reset(x_admin_token: str = Header(default="")):
 @app.post("/v1/players")
 def create_player(body: PlayerIn, response: Response):
     """Create a character, or sign back in to one. A new name becomes a new
-    character (with its Lightning address, class and STARTER_CARDS random
-    cards); an existing name needs its password. The first login to a seeded
+    character (with its Lightning address, class and STARTER_ITEMS random
+    items); an existing name needs its password. The first login to a seeded
     name (alice, bob) sets that password."""
     name = body.name.strip()
     if not name or len(name) > 24 or len(body.password) < 4:
@@ -282,9 +282,9 @@ def create_player(body: PlayerIn, response: Response):
                     "INSERT INTO players(name, role, ln_address, pw_salt, pw_hash) "
                     "VALUES (?,?,?,?,?)",
                     (name, role, ln_address, salt, _pw_hash(body.password, salt))).lastrowid
-                for card in random.sample(ARCHETYPES, STARTER_CARDS):   # starter pack
+                for item in random.sample(ARCHETYPES, STARTER_ITEMS):   # starter pack
                     conn.execute("INSERT INTO items(name, owner_id) VALUES (?, ?)",
-                                 (card, pid))
+                                 (item, pid))
         conn.execute("INSERT INTO sessions(token, player_id) VALUES (?,?)", (token, pid))
     response.set_cookie("session", token, httponly=True, samesite="lax")
     with db() as conn:

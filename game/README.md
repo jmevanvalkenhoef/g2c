@@ -53,8 +53,8 @@ to either side of the contract.
 
 ## Demo script
 
-The web app is **The Trading Post**, a concept skin for a magical card game
-(*Aetherbound*). Each player uses their own window, ideally their own computer:
+The web app is **The Trading Post**, a concept skin for a fantasy game where
+players trade items (swords, potions, relics). Each player uses their own window, ideally their own computer:
 their character on the left, the open market on the right, and a quest scroll
 that narrates their side of the trade. "For game studios" (top right) opens the
 partnership pitch.
@@ -62,14 +62,14 @@ partnership pitch.
 1. Both people open the game (http://localhost:8000, or the server's address).
 2. Each creates a character: any name, a password, a class, and the Lightning
    address their sales are paid to. Every new character gets five random
-   starter cards. Signing in later with the same name and password returns to it.
-3. Person A clicks a card → names a price → **Put on offer**.
+   starter items. Signing in later with the same name and password returns to it.
+3. Person A clicks an item in their bag → names a price → **Put on offer**.
 4. Person B sees it appear in the market → **Buy** → the trade window shows the
    invoice QR. Tap it (stub/lab) or scan it with a real wallet.
-5. B watches the escrow steps light up (payment locked → card sealed → seller
-   paid → payment claimed → card delivered). A sees "A trader is buying your …",
-   the card sealed in their collection, then "Sold".
-6. Failure drill: `SALE_FAIL_EVERY=2` on the stub, buy again → the card unseals
+5. B watches the escrow steps light up (payment locked → item sealed → seller
+   paid → payment claimed → item delivered). A sees "A trader is buying your …",
+   the item sealed in their bag, then "Sold".
+6. Failure drill: `SALE_FAIL_EVERY=2` on the stub, buy again → the item unseals
    and stays with the seller, the payment returns to the buyer.
 7. Debug controls on the stub:
    `curl -X POST -H 'X-Escrow-Secret: dev-secret' localhost:8001/v1/sales/<id>/fail|pause|resume`

@@ -1,6 +1,6 @@
 # g2c: safe trading of in-game items for bitcoin
 
-October 2026 · living version: [g2c White Paper](https://claude.ai/artifact/5mTHzmgXsTCQLdyShkWPrY) (Claude Docs)
+October 2026
 
 g2c is an escrow service that lets players buy and sell in-game items for bitcoin over the Lightning Network, with one guarantee: the buyer's money and the seller's item move together, or neither moves.
 
