@@ -31,9 +31,12 @@ cd game/escrow-stub && uv run uvicorn app:app --port 8001
 # open http://localhost:8000 in two browser windows (two player names)
 ```
 
-Login is name + password: the first login to a name (the seeded Alice and Bob
-included) sets its password, later logins must match. Sessions are random
-tokens (`X-Player-Session` header per tab, `session` cookie otherwise).
+`POST /v1/players` creates a character (name, password, optional `ln_address`
+and `role`) or signs back in to an existing one; the first login to a seeded
+name (alice, bob) sets its password. Sessions are random tokens
+(`X-Player-Session` header per tab, `session` cookie otherwise). Players edit
+their own payout method behind that session; `GAME_ADMIN_TOKEN` guards only
+the world reset.
 
 Env (defaults in parens) on the game: `ESCROW_URL` (localhost:8001),
 `ESCROW_SHARED_SECRET` (dev-secret). On the stub: `GAME_URL`
@@ -50,13 +53,28 @@ to either side of the contract.
 
 ## Demo script
 
-1. Window A: enter as `alice`, Inventory → claim a shop item → set price → **Sell**
-2. Window B: enter as `bob`, Market → **Buy** → QR + "waiting for payment…"
-3. Stub auto-pays after ~3 s → B sees "✅ paid", item moves to bob's inventory
-4. Failure drill: set `SALE_FAIL_EVERY=2`, buy again → item stays with seller,
-   purchase shows "❌ refunded" — money never moved
-5. Debug controls on the stub:
+The web app is **The Trading Post**, a concept skin for a magical card game
+(*Aetherbound*). Each player uses their own window, ideally their own computer:
+their character on the left, the open market on the right, and a quest scroll
+that narrates their side of the trade. "For game studios" (top right) opens the
+partnership pitch.
+
+1. Both people open the game (http://localhost:8000, or the server's address).
+2. Each creates a character: any name, a password, a class, and the Lightning
+   address their sales are paid to. Every new character gets five random
+   starter cards. Signing in later with the same name and password returns to it.
+3. Person A clicks a card → names a price → **Put on offer**.
+4. Person B sees it appear in the market → **Buy** → the trade window shows the
+   invoice QR. Tap it (stub/lab) or scan it with a real wallet.
+5. B watches the escrow steps light up (payment locked → card sealed → seller
+   paid → payment claimed → card delivered). A sees "A trader is buying your …",
+   the card sealed in their collection, then "Sold".
+6. Failure drill: `SALE_FAIL_EVERY=2` on the stub, buy again → the card unseals
+   and stays with the seller, the payment returns to the buyer.
+7. Debug controls on the stub:
    `curl -X POST -H 'X-Escrow-Secret: dev-secret' localhost:8001/v1/sales/<id>/fail|pause|resume`
+
+The seeded players `alice` and `bob` still exist for the automated drills.
 
 ## Contract notes (the part that makes swapping safe)
 

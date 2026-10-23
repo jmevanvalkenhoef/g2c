@@ -17,6 +17,8 @@ escrow commits it (after the money is final) or releases it.
 import hashlib
 import hmac
 import os
+import random
+import re
 import secrets
 import sqlite3
 import time
@@ -35,19 +37,27 @@ DB_PATH = Path(os.environ.get("DB_PATH")
 ESCROW_URL = os.environ.get("ESCROW_URL", "http://localhost:8001")
 SHARED_SECRET = os.environ.get("ESCROW_SHARED_SECRET", "dev-secret")  # set "" to disable
 PAYOUT_MODE = os.environ.get("PAYOUT_MODE", "lab")  # lab | real:
-GAME_ADMIN_TOKEN = os.environ.get("GAME_ADMIN_TOKEN", "")  # required for
-# payout edits + world reset when set (mainnet); empty = open (lab/dev)  # lab | real:
+GAME_ADMIN_TOKEN = os.environ.get("GAME_ADMIN_TOKEN", "")  # required for the
+# world reset when set (mainnet); empty = open (lab/dev)
 # lab  -> escrow pays the lab's seller node (regtest)
 # real -> escrow resolves the seller's own payout method (lnurl/nwc, signet+)
 # an escrow call that timed out may still have minted an invoice: keep the
 # listing held until that invoice can no longer be paid, then reopen it
 AMBIGUOUS_HOLD_S = int(os.environ.get("AMBIGUOUS_HOLD_S", "900"))
 
+# Aetherbound demo cards (the web app maps each name to its art, rarity and
+# element); seeded alice gets the even-indexed five, bob the odd, and every new
+# character receives STARTER_CARDS of them at random
 ARCHETYPES = [
-    "Rusty Sword", "Iron Shield", "Healing Potion", "Elixir of Speed",
-    "Wizard Hat", "Leather Boots", "Enchanted Bow", "Bag of Holding",
-    "Dragon Scale", "Mysterious Key",
+    "Ember Drake", "Frostbound Sentinel", "Moonlit Oracle", "Thornwood Druid",
+    "Voidcaller Lich", "Sunforged Paladin", "Stormglass Familiar", "Phoenix Feather",
+    "Runebound Golem", "Whispering Grimoire",
 ]
+
+STARTER_CARDS = 5
+ROLES = ("archmage", "runeknight", "ranger")
+LNADDR_RE = re.compile(r"^[\w.\-+]+@[\w.\-]+(\.[\w\-]+)+$")
+PLAYER_COLS = "id, name, role, ln_address, nwc_uri"
 
 app = FastAPI(title="g2c demo game")
 
@@ -93,6 +103,7 @@ def init_db(drop: bool = False) -> None:
               name  TEXT UNIQUE NOT NULL,
               ln_address TEXT,                   -- Lightning address (LUD-16)
               nwc_uri    TEXT,                   -- nostr+walletconnect://… (secret-ish)
+              role       TEXT NOT NULL DEFAULT 'archmage', -- character class (crest)
               pw_salt    TEXT,                   -- set on first login (claim)
               pw_hash    TEXT
             );
@@ -134,12 +145,13 @@ def init_db(drop: bool = False) -> None:
             """
         )
         if conn.execute("SELECT 1 FROM players WHERE name='alice'").fetchone() is None:
-            demo = [("alice", "alice@lightning.demo"), ("bob", "bob@lightning.demo")]
+            demo = [("alice", "alice@lightning.demo", "archmage"),
+                    ("bob", "bob@lightning.demo", "runeknight")]
             pids = {}
-            for name, addr in demo:
+            for name, addr, role in demo:
                 pids[name] = conn.execute(
-                    "INSERT INTO players(name, ln_address) VALUES (?, ?)",
-                    (name, addr)).lastrowid
+                    "INSERT INTO players(name, ln_address, role) VALUES (?, ?, ?)",
+                    (name, addr, role)).lastrowid
             for i, name in enumerate(ARCHETYPES):        # split assets 5 / 5
                 owner = "alice" if i % 2 == 0 else "bob"
                 conn.execute("INSERT INTO items(name, owner_id) VALUES (?, ?)",
@@ -164,7 +176,7 @@ async def require_player(request: Request, response: Response) -> dict:
         raise HTTPException(401, "no player session")
     with db() as conn:
         row = conn.execute(
-            "SELECT p.id, p.name, p.ln_address, p.nwc_uri FROM sessions s "
+            "SELECT p.id, p.name, p.role, p.ln_address, p.nwc_uri FROM sessions s "
             "JOIN players p ON p.id = s.player_id WHERE s.token=?",
             (token,)).fetchone()
     if not row:
@@ -196,6 +208,8 @@ def release_stale_holds(conn) -> None:
 class PlayerIn(BaseModel):
     name: str
     password: str
+    ln_address: Optional[str] = None   # new characters: where sales get paid
+    role: Optional[str] = None         # new characters: archmage|runeknight|ranger
 
 
 class ListingIn(BaseModel):
@@ -237,11 +251,17 @@ def admin_reset(x_admin_token: str = Header(default="")):
 
 @app.post("/v1/players")
 def create_player(body: PlayerIn, response: Response):
-    """Log in, or claim a name: the first login to a name sets its password
-    (seeded players included), every later login must match it."""
+    """Create a character, or sign back in to one. A new name becomes a new
+    character (with its Lightning address, class and STARTER_CARDS random
+    cards); an existing name needs its password. The first login to a seeded
+    name (alice, bob) sets that password."""
     name = body.name.strip()
-    if not name or len(body.password) < 4:
-        raise HTTPException(422, "name and a password of 4+ characters required")
+    if not name or len(name) > 24 or len(body.password) < 4:
+        raise HTTPException(422, "a name (up to 24 characters) and a password of 4+ characters are required")
+    ln_address = (body.ln_address or "").strip() or None
+    if ln_address and not LNADDR_RE.match(ln_address):
+        raise HTTPException(422, "that doesn't look like a Lightning address (name@domain)")
+    role = body.role if body.role in ROLES else "archmage"
     token = secrets.token_urlsafe(32)
     with tx() as conn:
         row = conn.execute(
@@ -259,14 +279,17 @@ def create_player(body: PlayerIn, response: Response):
                              (salt, _pw_hash(body.password, salt), pid))
             else:
                 pid = conn.execute(
-                    "INSERT INTO players(name, pw_salt, pw_hash) VALUES (?,?,?)",
-                    (name, salt, _pw_hash(body.password, salt))).lastrowid
+                    "INSERT INTO players(name, role, ln_address, pw_salt, pw_hash) "
+                    "VALUES (?,?,?,?,?)",
+                    (name, role, ln_address, salt, _pw_hash(body.password, salt))).lastrowid
+                for card in random.sample(ARCHETYPES, STARTER_CARDS):   # starter pack
+                    conn.execute("INSERT INTO items(name, owner_id) VALUES (?, ?)",
+                                 (card, pid))
         conn.execute("INSERT INTO sessions(token, player_id) VALUES (?,?)", (token, pid))
     response.set_cookie("session", token, httponly=True, samesite="lax")
     with db() as conn:
         row = conn.execute(
-            "SELECT id, name, ln_address, nwc_uri FROM players WHERE id=?",
-            (pid,)).fetchone()
+            f"SELECT {PLAYER_COLS} FROM players WHERE id=?", (pid,)).fetchone()
     return {**dict(row), "session": token}
 
 
@@ -281,12 +304,12 @@ class ProfileIn(BaseModel):
 
 
 @app.put("/v1/players/me")
-async def update_profile(body: ProfileIn, request: Request, response: Response,
-                         x_admin_token: str = Header(default="")):
-    # payout methods are money-routing data: edits need the admin token
-    if GAME_ADMIN_TOKEN and x_admin_token != GAME_ADMIN_TOKEN:
-        raise HTTPException(403, "payout edits need the admin token")
+async def update_profile(body: ProfileIn, request: Request, response: Response):
+    # a player edits only their own payout method, behind their password session
     pid = (await require_player(request, response))["id"]
+    ln_address = (body.ln_address or "").strip()
+    if ln_address and not LNADDR_RE.match(ln_address):
+        raise HTTPException(422, "that doesn't look like a Lightning address (name@domain)")
     with tx() as conn:
         conn.execute(
             "UPDATE players SET ln_address=?, nwc_uri=? WHERE id=?",
@@ -294,8 +317,7 @@ async def update_profile(body: ProfileIn, request: Request, response: Response,
              (body.nwc_uri or "").strip() or None, pid))
     with db() as conn:
         row = conn.execute(
-            "SELECT id, name, ln_address, nwc_uri FROM players WHERE id=?",
-            (pid,)).fetchone()
+            f"SELECT {PLAYER_COLS} FROM players WHERE id=?", (pid,)).fetchone()
     return dict(row)
 
 
@@ -436,11 +458,24 @@ async def purchase_status(payment_hash: str, request: Request, response: Respons
     await require_player(request, response)
     with db() as conn:
         row = conn.execute(
-            "SELECT status FROM purchases WHERE payment_hash=?",
+            "SELECT status, sale_id FROM purchases WHERE payment_hash=?",
             (payment_hash,)).fetchone()
     if not row:
         raise HTTPException(404, "unknown purchase")
-    return {"status": row["status"]}
+    # the escrow's current step, so the player can watch the trade progress;
+    # purely informational (ownership truth stays in this DB)
+    escrow_state = None
+    if row["sale_id"]:
+        headers = {"X-Escrow-Secret": SHARED_SECRET} if SHARED_SECRET else {}
+        try:
+            async with httpx.AsyncClient(timeout=3) as client:
+                r = await client.get(f"{ESCROW_URL}/v1/sales/{row['sale_id']}",
+                                     headers=headers)
+            if r.status_code == 200:
+                escrow_state = r.json().get("state")
+        except httpx.HTTPError:
+            pass
+    return {"status": row["status"], "escrow_state": escrow_state}
 
 
 @app.post("/v1/purchases/{payment_hash}/simulate-pay")

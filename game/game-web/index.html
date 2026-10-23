@@ -3,269 +3,819 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>g2c marketplace</title>
-<link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22g2c%22%2C%22short_name%22%3A%22g2c%22%2C%22display%22%3A%22standalone%22%7D">
+<title>The Trading Post · Aetherbound</title>
+<link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22The%20Trading%20Post%22%2C%22short_name%22%3A%22Trading%20Post%22%2C%22display%22%3A%22standalone%22%7D">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700&family=Cinzel:wght@500;600;700&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
-  :root { --bg:#12121a; --card:#1d1d29; --fg:#e8e8f0; --dim:#8a8aa0; --acc:#7c5cff; --ok:#3ecf8e; --bad:#ff6b81; }
-  * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--fg); font:16px/1.45 system-ui,sans-serif; padding-bottom:70px; }
-  header { display:flex; justify-content:space-between; align-items:center; padding:14px 16px; border-bottom:1px solid #2a2a3a; }
-  header b { color:var(--acc); }
-  main { padding:16px; max-width:640px; margin:0 auto; }
-  .card { background:var(--card); border-radius:12px; padding:14px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; gap:10px; }
-  .card .meta { color:var(--dim); font-size:.85rem; }
-  .price { white-space:nowrap; font-weight:600; }
-  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:8px 14px; font-size:.95rem; cursor:pointer; }
-  button.ghost { background:transparent; color:var(--dim); border:1px solid #2a2a3a; }
-  button:disabled { opacity:.4; }
-  nav { position:fixed; bottom:0; left:0; right:0; display:flex; background:var(--card); border-top:1px solid #2a2a3a; }
-  nav[hidden] { display:none; }
-  nav button { flex:1; background:transparent; border-radius:0; padding:12px; color:var(--dim); }
-  nav button.on { color:var(--acc); }
-  input[type=text], input[type=number] { background:#2a2a3a; color:var(--fg); border:0; border-radius:8px; padding:8px 10px; width:100%; }
-  input[type=number]::-webkit-inner-spin-button,
-  input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
-  input[type=number] { -moz-appearance:textfield; appearance:textfield; }
-  .banner { background:var(--card); padding:12px; border-radius:12px; text-align:center; }
-  #login { display:flex; gap:8px; margin:40vh auto 0; max-width:340px; }
-  .pill { font-size:.75rem; padding:2px 8px; border-radius:99px; background:#2a2a3a; color:var(--dim); }
-  .pill.pending { color:#e8c46a; } .pill.ok { color:var(--ok); } .pill.bad { color:var(--bad); }
-  #qrbox { display:flex; flex-direction:column; align-items:center; gap:10px; }
-  #qrbox img, #qrbox canvas { background:#fff; padding:8px; border-radius:8px; }
-  .mono { font-family:ui-monospace,monospace; font-size:.7rem; color:var(--dim); word-break:break-all; }
-  .empty { text-align:center; color:var(--dim); padding:30px 0; }
-  #err { position:fixed; top:10px; left:50%; transform:translateX(-50%); max-width:90vw;
-    background:var(--bad); color:#fff; padding:8px 14px; border-radius:8px; font-size:.85rem;
-    display:none; z-index:9; word-break:break-word; }
-  #err code { font-family:ui-monospace,monospace; }
+  :root {
+    --night: #0b0a14; --night-2: #16122a;
+    --stone: #1c1a24; --stone-2: #26232f; --stone-edge: #3a3444;
+    --gold: #d8b468; --gold-2: #f3dc9b; --gold-dim: #8a7246;
+    --ember: #8c1f1f; --ember-2: #b8322a;
+    --parchment: #e9dcb9; --parchment-ink: #3b2a17; --parchment-red: #8a1c1c;
+    --ink: #ece4d2; --ink-dim: #a99f8c; --ink-faint: #6f6757;
+    --lightning: #6fc3ff;
+    --common: #b9b4aa; --rare: #4f9dff; --epic: #b46cff; --legendary: #f0b43c;
+    --ok: #7fd18b; --bad: #ff7a6b;
+    --serif: 'EB Garamond', Georgia, serif;
+    --caps: 'Cinzel', 'Trajan Pro', Georgia, serif;
+    --deco: 'Cinzel Decorative', 'Cinzel', Georgia, serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { background: var(--night); }
+  body {
+    min-height: 100vh; color: var(--ink); font: 17px/1.45 var(--serif);
+    background:
+      radial-gradient(1px 1px at 12% 18%, #fff8 50%, transparent 51%),
+      radial-gradient(1px 1px at 27% 8%, #fff6 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 44% 22%, #fff7 50%, transparent 51%),
+      radial-gradient(1px 1px at 63% 12%, #fff5 50%, transparent 51%),
+      radial-gradient(1px 1px at 78% 26%, #fff8 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 91% 9%, #fff6 50%, transparent 51%),
+      radial-gradient(1px 1px at 6% 40%, #fff4 50%, transparent 51%),
+      radial-gradient(1px 1px at 96% 44%, #fff4 50%, transparent 51%),
+      radial-gradient(ellipse 80% 40% at 50% 100%, #3a1d2a 0%, transparent 70%),
+      linear-gradient(180deg, #07060f 0%, var(--night-2) 55%, #241426 100%);
+    background-attachment: fixed;
+    overflow-x: hidden;
+  }
+  /* moon + rooftops + lanterns: pure decoration */
+  .sky { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+  .moon { position: absolute; top: 34px; left: 22%; width: 74px; height: 74px; border-radius: 50%;
+    background: radial-gradient(circle at 38% 36%, #e8e2d0 0%, #b9b19c 55%, #8d8574 100%);
+    box-shadow: 0 0 60px 12px #fff1e01a; opacity: .85; }
+  .roofs { position: absolute; left: 0; right: 0; bottom: 0; height: 34vh;
+    background: #0d0b16;
+    clip-path: polygon(0 62%, 4% 62%, 4% 48%, 7% 40%, 10% 48%, 10% 60%, 16% 60%, 16% 44%, 19% 36%, 22% 44%, 22% 58%,
+      30% 58%, 30% 50%, 34% 50%, 34% 40%, 37% 30%, 40% 40%, 40% 56%, 48% 56%, 48% 46%, 52% 38%, 56% 46%, 56% 60%,
+      62% 60%, 62% 42%, 65% 34%, 68% 42%, 68% 56%, 76% 56%, 76% 48%, 80% 40%, 84% 48%, 84% 62%, 90% 62%, 90% 46%,
+      93% 38%, 96% 46%, 96% 60%, 100% 60%, 100% 100%, 0 100%); }
+  .lantern { position: absolute; width: 10px; height: 10px; border-radius: 50%; background: #ffbf5a;
+    box-shadow: 0 0 18px 6px #ff9d2e55; animation: flicker 3.6s ease-in-out infinite; }
+  @keyframes flicker { 0%,100% { opacity: .9; } 50% { opacity: .55; } }
+  @media (prefers-reduced-motion: reduce) { .lantern, .card.sealed .seal, .step.active .dot { animation: none !important; } }
+
+  .wrap { position: relative; z-index: 1; max-width: 1480px; margin: 0 auto; padding: 18px 24px 28px; }
+
+  /* ---------------------------------------------------------- banner */
+  .banner { position: relative; display: block; width: min(600px, 100%); margin: 0 auto 26px; text-align: center;
+    padding: 14px 64px 12px; border-radius: 999px;
+    background: linear-gradient(180deg, #2b1a12, #170e0a); border: 2px solid var(--gold-dim);
+    box-shadow: inset 0 0 0 4px #170e0a, inset 0 0 0 5px var(--gold-dim), 0 8px 30px #000a; }
+  .banner h1 { font: 700 clamp(26px, 4vw, 40px)/1.05 var(--deco); letter-spacing: .04em;
+    background: linear-gradient(180deg, var(--gold-2), var(--gold) 55%, #a7843f);
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .banner p { font: 600 11px/1 var(--caps); letter-spacing: .42em; color: var(--ink-dim); margin-top: 6px; }
+  .banner .coin { position: absolute; top: 50%; width: 22px; height: 22px; margin-top: -11px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, var(--gold-2), var(--gold) 60%, #8a6a2c); box-shadow: 0 0 8px #d8b46888;
+    font: 700 6px/22px var(--caps); color: #5a4317; }
+  .banner .coin.l { left: 26px; } .banner .coin.r { right: 26px; }
+  .studio-btn { position: absolute; right: 24px; top: 26px; }
+
+  /* ---------------------------------------------------------- layout */
+  .realm { display: grid; grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.6fr); gap: 28px; align-items: start; }
+
+  .frame { position: relative; border: 1.5px solid var(--gold-dim); border-radius: 4px;
+    box-shadow: inset 0 0 0 3px #0008, inset 0 0 0 4px #d8b46833, 0 12px 34px #000b; }
+  .frame::before, .frame::after { content: ''; position: absolute; width: 18px; height: 18px; border: 2px solid var(--gold); }
+  .frame::before { top: -5px; left: -5px; border-right: 0; border-bottom: 0; }
+  .frame::after { bottom: -5px; right: -5px; border-left: 0; border-top: 0; }
+
+  .panel { padding: 20px 22px 18px; min-height: 520px;
+    background:
+      radial-gradient(ellipse at 30% 0%, #ffffff0a, transparent 60%),
+      repeating-linear-gradient(115deg, #ffffff03 0 2px, transparent 2px 7px),
+      linear-gradient(180deg, var(--stone-2), var(--stone)); }
+  .panel.me-here { box-shadow: inset 0 0 0 3px #0008, inset 0 0 0 4px #d8b46866, 0 0 0 1px #d8b46833, 0 12px 34px #000b; }
+
+  .head { display: flex; gap: 16px; align-items: center; }
+  .crest { flex: 0 0 auto; width: 92px; height: 92px; border-radius: 50%; display: grid; place-items: center;
+    border: 3px solid var(--gold); box-shadow: inset 0 0 0 3px #0007, 0 0 18px #0009; }
+  .crest svg { width: 54px; height: 54px; }
+  .crest.archmage { background: radial-gradient(circle at 40% 35%, #2f8a4a, #134a26 70%); }
+  .crest.runeknight { background: radial-gradient(circle at 40% 35%, #a2283a, #4e0f19 70%); }
+  .crest.ranger { background: radial-gradient(circle at 40% 35%, #2b7f86, #0f3b40 70%); }
+  .who h2 { font: 700 30px/1.05 var(--caps); letter-spacing: .03em; }
+  .who h2 { overflow-wrap: anywhere; }
+  .who h2.archmage { color: #9fe3a4; } .who h2.runeknight { color: #ff9f9f; } .who h2.ranger { color: #8fe0e6; }
+  .who .title { font-style: italic; color: var(--ink-dim); margin: 2px 0 7px; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px 4px 9px; border-radius: 999px;
+    font: 600 10.5px/1.2 var(--caps); letter-spacing: .1em; color: #cfeaff;
+    background: linear-gradient(180deg, #17324a, #0f2133); border: 1px solid #3c6f99; cursor: pointer; }
+  .badge.unset { color: #ffd9a8; background: linear-gradient(180deg, #3a2614, #23160b); border-color: #8a6233; }
+  .badge.static { cursor: default; }
+  .badge svg { width: 11px; height: 11px; fill: var(--lightning); }
+  .badge.unset svg { fill: #ffbf5a; }
+  .enter { margin-top: 2px; }
+
+  .rule { height: 1px; margin: 16px 0 14px; background: linear-gradient(90deg, transparent, var(--gold-dim), transparent); }
+  .sec { display: flex; justify-content: space-between; font: 600 12px/1 var(--caps); letter-spacing: .28em; color: var(--ink-dim); margin-bottom: 12px; }
+  .sec.spaced { margin-top: 22px; }
+
+  /* ---------------------------------------------------------- cards */
+  .bag { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+  .slot { aspect-ratio: 5 / 7; border-radius: 7px; background: #0d0c12; box-shadow: inset 0 2px 8px #000c; border: 1px solid #ffffff08; }
+  .card { position: relative; display: block; width: 100%; aspect-ratio: 5 / 7; border-radius: 7px; padding: 0;
+    border: 2px solid var(--rc); background: #0d0c12; cursor: pointer; overflow: hidden; color: inherit; font: inherit;
+    box-shadow: 0 0 0 1px #000, 0 4px 10px #000a, 0 0 10px -2px var(--rc);
+    transition: transform .18s ease, box-shadow .18s ease; }
+  .card:hover:not(.inert), .card:focus-visible { transform: translateY(-4px) scale(1.04); z-index: 3;
+    box-shadow: 0 0 0 1px #000, 0 10px 22px #000c, 0 0 18px var(--rc); outline: none; }
+  .card.inert { cursor: default; }
+  .card .art { position: absolute; inset: 0; display: grid; place-items: center; background: var(--eg); }
+  .card .art::after { content: ''; position: absolute; inset: 0;
+    background: radial-gradient(circle at 50% 38%, transparent 30%, #0009 100%); }
+  .card .art svg { position: relative; z-index: 1; width: 56%; height: 56%; filter: drop-shadow(0 2px 4px #000c); }
+  .card .cost { position: absolute; top: 4px; left: 4px; z-index: 2; width: 18px; height: 18px; border-radius: 50%;
+    display: grid; place-items: center; font: 700 10px/1 var(--caps); color: #fff;
+    background: radial-gradient(circle at 35% 30%, #8fd0ff, #1f5c9c); box-shadow: 0 0 0 1px #000a; }
+  .card .ribbon { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; padding: 3px 0 2px; text-align: center;
+    font: 700 8.5px/1.1 var(--caps); letter-spacing: .12em; color: #2a1a05;
+    background: linear-gradient(180deg, var(--gold-2), var(--gold)); }
+  .card .seal { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center;
+    background: #3a1d6a99; box-shadow: inset 0 0 18px #c79bff; animation: seal 1.8s ease-in-out infinite; }
+  .card .seal svg { width: 40%; fill: #f1e2ff; filter: drop-shadow(0 0 6px #c79bff); }
+  @keyframes seal { 0%,100% { box-shadow: inset 0 0 12px #c79bff; } 50% { box-shadow: inset 0 0 26px #e2ccff; } }
+  .r-common { --rc: var(--common); } .r-rare { --rc: var(--rare); } .r-epic { --rc: var(--epic); } .r-legendary { --rc: var(--legendary); }
+  .e-fire { --eg: radial-gradient(circle at 50% 40%, #ffb35c, #c2361e 55%, #3d0b07); }
+  .e-frost { --eg: radial-gradient(circle at 50% 40%, #d8f3ff, #4f9fd6 55%, #0c2a45); }
+  .e-arcane { --eg: radial-gradient(circle at 50% 40%, #e3c7ff, #7b3fc4 55%, #1d0a3a); }
+  .e-nature { --eg: radial-gradient(circle at 50% 40%, #c8f2a4, #3f8f3a 55%, #0d2b10); }
+  .e-shadow { --eg: radial-gradient(circle at 50% 40%, #b69ad1, #3b2752 55%, #0b0612); }
+  .e-light { --eg: radial-gradient(circle at 50% 40%, #fff6cf, #e0b54a 55%, #4a3307); }
+  .e-storm { --eg: radial-gradient(circle at 50% 40%, #e2f0ff, #5a7fbf 55%, #121c38); }
+  .e-earth { --eg: radial-gradient(circle at 50% 40%, #f0d9b0, #9a6a3a 55%, #2c1a0b); }
+
+  .tip { position: fixed; z-index: 50; pointer-events: none; max-width: 240px; padding: 9px 12px 10px;
+    background: #120f1aee; border: 1px solid var(--gold-dim); border-radius: 6px; box-shadow: 0 8px 24px #000c; display: none; }
+  .tip b { display: block; font: 600 14px/1.2 var(--caps); color: var(--gold-2); }
+  .tip .meta { font: 600 10px/1.6 var(--caps); letter-spacing: .14em; }
+  .tip i { display: block; color: var(--ink-dim); font-size: 14px; margin-top: 4px; }
+
+  /* ---------------------------------------------------------- activity */
+  .log { list-style: none; max-height: 150px; overflow-y: auto; }
+  .log li { font-style: italic; color: var(--ink-dim); font-size: 15px; padding: 2px 0; }
+  .log li b { font-style: normal; font-weight: 500; color: var(--ink); }
+  .log li.good { color: #b9e6bd; } .log li.warn { color: #f0c49a; }
+
+  /* ---------------------------------------------------------- offers board */
+  .board { min-height: 520px; padding: 54px 26px 18px; display: flex; flex-direction: column;
+    background:
+      repeating-linear-gradient(90deg, #00000026 0 1px, transparent 1px 66px),
+      radial-gradient(ellipse at 50% 0%, #ffffff0d, transparent 65%),
+      linear-gradient(180deg, #3b2817, #2a1b10 60%, #22160d); }
+  .board-tag { position: absolute; top: -17px; left: 50%; transform: translateX(-50%); padding: 7px 34px;
+    font: 700 14px/1 var(--caps); letter-spacing: .3em; color: #fbe9d0; white-space: nowrap;
+    background: linear-gradient(180deg, var(--ember-2), var(--ember));
+    clip-path: polygon(0 50%, 14px 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 14px 100%);
+    box-shadow: 0 4px 12px #000a; }
+  .cols, .offer { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 150px) 92px auto; align-items: center; gap: 12px; }
+  .offer .seller { overflow-wrap: anywhere; line-height: 1.25; }
+  .cols { font: 600 11.5px/1 var(--caps); letter-spacing: .26em; color: #c8b28a; padding-bottom: 10px;
+    border-bottom: 1px solid #d8b46866; }
+  .offers { flex: 1; padding-top: 6px; }
+  .offer { padding: 10px 0; border-bottom: 1px solid #ffffff10; }
+  .offer .item { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .offer .item .card { width: 44px; flex: 0 0 44px; }
+  .offer .item .card .art svg { width: 62%; height: 62%; }
+  .offer .nm { min-width: 0; }
+  .offer .nm b { display: block; font: 600 15.5px/1.2 var(--caps); color: var(--ink); }
+  .offer .nm span { display: block; font: 600 10px/1.4 var(--caps); letter-spacing: .14em; color: var(--rc); white-space: nowrap; }
+  .offer .seller { font-family: var(--caps); font-size: 14.5px; }
+  .offer .price { font: 600 16px/1.1 var(--caps); color: var(--gold-2); }
+  .offer .price small { display: block; font: italic 13px/1.2 var(--serif); color: var(--ink-dim); letter-spacing: 0; }
+  .offer.sealed { opacity: .92; }
+  .offer.sealed .price { color: #d9c2ff; }
+  .pillflag { font: 600 10px/1.2 var(--caps); letter-spacing: .14em; color: #e4d2ff; text-align: center; }
+  .empty { flex: 1; display: grid; place-content: center; text-align: center; padding: 60px 0; }
+  .empty h3 { font: 600 24px/1.2 var(--caps); letter-spacing: .08em; color: var(--ink); }
+  .empty p { font-style: italic; color: var(--ink-dim); margin-top: 6px; }
+  .board-foot { margin-top: 14px; text-align: center; font-style: italic; color: #c9b796; font-size: 15px; }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font: 600 10.5px/1 var(--caps); letter-spacing: .12em; padding: 7px 10px; border-radius: 999px; cursor: pointer;
+    color: var(--ink-dim); background: #00000040; border: 1px solid #d8b46844; }
+  .chip.on { color: #2a1a05; background: linear-gradient(180deg, var(--gold-2), var(--gold)); border-color: #6e5526; }
+  .toolbar select { font: 600 11px/1 var(--caps); letter-spacing: .1em; color: var(--ink); background: #00000050;
+    border: 1px solid #d8b46866; border-radius: 4px; padding: 7px 8px; }
+  .mine-strip { margin-bottom: 16px; padding: 10px 14px; border: 1px solid #d8b46855; border-radius: 6px; background: #00000038; }
+  .mine-strip h4 { font: 600 11px/1 var(--caps); letter-spacing: .26em; color: #c8b28a; margin-bottom: 8px; }
+  .mine-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 0; font-size: 15.5px; }
+  .mine-row b { font-family: var(--caps); font-weight: 600; font-size: 14.5px; }
+  .mine-row .st { font-style: italic; color: var(--ink-dim); }
+  .mine-row .st.sealed { color: #d9c2ff; } .mine-row .st.live { color: var(--gold-2); }
+
+  .create { max-width: 820px; margin: 0 auto; padding: 28px 32px 26px; background: linear-gradient(180deg, var(--stone-2), var(--stone)); }
+  .create h2 { font: 700 26px/1.2 var(--caps); letter-spacing: .06em; color: var(--gold-2); }
+  .create .sub { font-style: italic; color: var(--ink-dim); margin: 4px 0 20px; }
+  .create-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 20px; }
+  .create-grid .wide { grid-column: 1 / -1; }
+  .roles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 2px 0 16px; }
+  .role { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 8px 12px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--stone-edge); background: #0f0d1599; color: var(--ink-dim); font: 600 13px/1 var(--caps); letter-spacing: .1em; }
+  .role .crest { width: 64px; height: 64px; border-width: 2px; } .role .crest svg { width: 36px; height: 36px; }
+  .role.on { border-color: var(--gold); color: var(--gold-2); box-shadow: 0 0 0 1px var(--gold), 0 0 18px #d8b46833; }
+  .create .actions { align-items: center; justify-content: space-between; }
+
+  /* ---------------------------------------------------------- buttons */
+  .btn { font: 700 12px/1 var(--caps); letter-spacing: .14em; padding: 10px 14px; border-radius: 4px; cursor: pointer;
+    color: #2a1a05; border: 1px solid #6e5526; background: linear-gradient(180deg, var(--gold-2), var(--gold));
+    box-shadow: 0 2px 0 #6e5526, 0 4px 10px #0008; white-space: nowrap; }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:active { transform: translateY(1px); box-shadow: 0 1px 0 #6e5526; }
+  .btn:disabled { filter: grayscale(.7) brightness(.7); cursor: default; }
+  .btn.ghost { color: var(--gold-2); background: transparent; border-color: var(--gold-dim); box-shadow: none; }
+  .btn.ember { color: #fbe9d0; border-color: #4d0f0f; background: linear-gradient(180deg, var(--ember-2), var(--ember)); box-shadow: 0 2px 0 #4d0f0f, 0 4px 10px #0008; }
+  .btn.small { padding: 7px 10px; font-size: 10.5px; }
+
+  /* ---------------------------------------------------------- quest scroll */
+  .below { display: grid; grid-template-columns: 1fr minmax(0, 1100px) 1fr; gap: 24px; align-items: end; margin-top: 46px; }
+  .note h4 { font: 600 11.5px/1.2 var(--caps); letter-spacing: .24em; color: #8fb7ff; margin-bottom: 4px; }
+  .note p { font-style: italic; color: var(--ink-dim); font-size: 15px; line-height: 1.3; }
+  .note.right { text-align: left; }
+  .scroll { position: relative; padding: 20px 52px 22px; color: var(--parchment-ink);
+    background:
+      radial-gradient(ellipse at 20% 30%, #00000014, transparent 40%),
+      radial-gradient(ellipse at 80% 70%, #0000001a, transparent 45%),
+      radial-gradient(ellipse at 60% 20%, #ffffff40, transparent 50%),
+      linear-gradient(180deg, #efe3c3, var(--parchment) 50%, #ddcca2);
+    box-shadow: 0 14px 40px #000c; }
+  .scroll::before, .scroll::after { content: ''; position: absolute; top: -12px; bottom: -12px; width: 22px; border-radius: 11px;
+    background: linear-gradient(90deg, #5a3a1c, #a8783f 45%, #5a3a1c); box-shadow: 0 6px 14px #000a; }
+  .scroll::before { left: -11px; } .scroll::after { right: -11px; }
+  .scroll .qhead { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 8px; margin-bottom: 10px;
+    border-bottom: 1px solid #3b2a1733; font: 700 13px/1.2 var(--caps); letter-spacing: .26em; }
+  .scroll .qhead .q { color: var(--parchment-red); }
+  .scroll .qhead .n { color: #6b5639; letter-spacing: .18em; white-space: nowrap; }
+  .scroll .qtext { font-size: clamp(18px, 1.8vw, 24px); line-height: 1.35; }
+  .scroll .qtext em { color: var(--parchment-red); font-style: normal; font-weight: 500; }
+
+  /* ---------------------------------------------------------- modals */
+  .veil { position: fixed; inset: 0; z-index: 40; display: none; place-items: center; padding: 16px;
+    background: radial-gradient(ellipse at center, #0a0812cc, #050409f2); }
+  .veil.open { display: grid; }
+  .dialog { width: min(760px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; overflow-x: hidden; padding: 26px 28px 24px;
+    background: linear-gradient(180deg, var(--stone-2), var(--stone)); }
+  .dialog.frame::before { top: 6px; left: 6px; } .dialog.frame::after { bottom: 6px; right: 6px; }  /* corners inside: no scrollbars */
+  .dialog h3 { font: 700 22px/1.2 var(--caps); letter-spacing: .08em; color: var(--gold-2); }
+  .dialog .sub { font-style: italic; color: var(--ink-dim); margin: 2px 0 16px; }
+  .dialog .x { position: absolute; top: 12px; right: 14px; background: none; border: 0; color: var(--ink-dim);
+    font: 600 22px/1 var(--caps); cursor: pointer; }
+  .split { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 24px; align-items: start; }
+  .bigcard .card { width: 170px; cursor: default; }
+  .bigcard .card .cost { width: 28px; height: 28px; font-size: 14px; top: 7px; left: 7px; }
+  .bigcard .card .ribbon { font-size: 11px; padding: 5px 0 4px; }
+  .bigcard .flavor { font-style: italic; color: var(--ink-dim); font-size: 14.5px; margin-top: 10px; }
+  .field { display: block; margin-bottom: 12px; }
+  .field span { display: block; font: 600 11px/1.4 var(--caps); letter-spacing: .2em; color: var(--ink-dim); margin-bottom: 5px; }
+  .field input { width: 100%; padding: 10px 12px; border-radius: 4px; border: 1px solid var(--stone-edge); background: #0f0d15;
+    color: var(--ink); font: 18px/1.2 var(--serif); }
+  .field input:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 2px #d8b46833; }
+  .field input[type=number]::-webkit-inner-spin-button, .field input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  .field input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+  .hint { font-style: italic; color: var(--ink-dim); font-size: 14.5px; }
+
+  .bigprice { font: 700 30px/1.1 var(--caps); color: var(--gold-2); }
+  .split-fee { font-style: italic; color: var(--ink-dim); font-size: 15px; margin: 2px 0 14px; }
+  .qrwrap { display: flex; gap: 16px; align-items: center; margin-bottom: 14px; }
+  #qr { flex: 0 0 auto; padding: 8px; background: #fff; border-radius: 6px; cursor: pointer; box-shadow: 0 0 0 2px var(--gold-dim); }
+  #qr img, #qr canvas { display: block; }
+  .bolt11 { font: 11px/1.3 ui-monospace, monospace; color: var(--ink-faint); word-break: break-all; margin-top: 6px; max-height: 44px; overflow: hidden; }
+  .steps { list-style: none; margin: 4px 0 12px; }
+  .step { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; align-items: start; padding: 6px 0; color: var(--ink-faint); }
+  .step .dot { width: 14px; height: 14px; margin-top: 4px; border-radius: 50%; border: 2px solid var(--stone-edge); }
+  .step b { display: block; font: 600 14px/1.25 var(--caps); letter-spacing: .06em; }
+  .step span { font-style: italic; font-size: 14.5px; }
+  .step.done { color: var(--ink); } .step.done .dot { background: var(--ok); border-color: var(--ok); }
+  .step.active { color: var(--gold-2); } .step.active .dot { border-color: var(--gold); animation: pulse 1.2s ease-in-out infinite; }
+  .step.fail .dot { background: var(--bad); border-color: var(--bad); }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 #d8b46866; } 50% { box-shadow: 0 0 0 6px #d8b46800; } }
+  .outcome { font: 600 17px/1.3 var(--caps); letter-spacing: .04em; margin-bottom: 12px; }
+  .outcome.good { color: var(--ok); } .outcome.bad { color: var(--bad); }
+
+  .pitch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 6px 0 18px; }
+  .pitch div { padding: 14px 16px; border: 1px solid var(--stone-edge); border-radius: 6px; background: #0f0d1599; }
+  .pitch b { display: block; font: 600 15px/1.25 var(--caps); color: var(--gold-2); margin-bottom: 4px; }
+  .pitch p { color: var(--ink-dim); font-size: 15.5px; }
+  .calls { font: 13px/1.6 ui-monospace, monospace; color: #cfe4ff; background: #0b0a10; border: 1px solid var(--stone-edge);
+    border-radius: 6px; padding: 12px 14px; margin-bottom: 14px; overflow-x: auto; white-space: pre; }
+  .calls i { color: var(--ink-faint); font-style: normal; }
+  .proposed { font: 600 9.5px/1 var(--caps); letter-spacing: .14em; color: #2a1a05; background: var(--gold); padding: 2px 6px; border-radius: 3px; margin-left: 6px; vertical-align: 2px; }
+
+  #err { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 60; max-width: 90vw; display: none;
+    padding: 9px 16px; border-radius: 4px; background: #5a1414; border: 1px solid var(--bad); color: #ffe3dc; font-size: 15px; }
+
+  /* ---------------------------------------------------------- responsive */
+  @media (max-width: 1080px) {
+    .realm { grid-template-columns: minmax(0, 1fr); }
+    .below { grid-template-columns: 1fr 1fr; }
+    .scroll { grid-column: 1 / -1; grid-row: 1; }
+    .studio-btn { position: static; display: block; margin: -12px auto 22px; }
+  }
+  @media (max-width: 760px) {
+    .wrap { padding: 14px 16px 24px; }
+    .realm { grid-template-columns: minmax(0, 1fr); gap: 30px; }
+    .create { padding: 22px 18px; }
+    .create-grid { grid-template-columns: minmax(0, 1fr); }
+    .role .crest { width: 52px; height: 52px; } .role .crest svg { width: 30px; height: 30px; }
+    .banner { padding: 12px 46px 10px; }
+    .banner .coin.l { left: 14px; } .banner .coin.r { right: 14px; }
+    .banner p { letter-spacing: .24em; }
+    .panel, .board { min-height: 0; }
+    .crest { width: 74px; height: 74px; } .crest svg { width: 42px; height: 42px; }
+    .cols { display: none; }
+    .offer { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'item act' 'meta act'; row-gap: 4px; }
+    .offer .item { grid-area: item; } .offer .act { grid-area: act; }
+    .offer .seller, .offer .price { grid-area: meta; }
+    .offer .seller { display: none; }
+    .split { grid-template-columns: minmax(0, 1fr); }
+    .bigcard { display: flex; gap: 14px; align-items: flex-start; }
+    .bigcard .card { width: 110px; flex: 0 0 110px; }
+    .pitch { grid-template-columns: minmax(0, 1fr); }
+    .below { grid-template-columns: minmax(0, 1fr); margin-top: 36px; }
+    .scroll { padding: 18px 28px; }
+  }
 </style>
 </head>
 <body>
-<div id="err"></div>
-<div id="app"></div>
-<nav id="nav" hidden>
-  <button data-tab="market" class="on">🛒 Market</button>
-  <button data-tab="inv">🎒 Inventory</button>
-</nav>
+<div class="sky" aria-hidden="true">
+  <div class="moon"></div>
+  <div class="roofs"></div>
+  <span class="lantern" style="left:14%;bottom:20vh"></span>
+  <span class="lantern" style="left:31%;bottom:16vh;animation-delay:.8s"></span>
+  <span class="lantern" style="left:47%;bottom:22vh;animation-delay:1.6s"></span>
+  <span class="lantern" style="left:66%;bottom:17vh;animation-delay:.4s"></span>
+  <span class="lantern" style="left:83%;bottom:21vh;animation-delay:2.2s"></span>
+</div>
+<div id="err" role="alert"></div>
+<div class="tip" id="tip"></div>
+
+<div class="wrap">
+  <header class="banner">
+    <span class="coin l" aria-hidden="true">G2C</span>
+    <h1>The Trading Post</h1>
+    <p>An Aetherbound market · powered by g2c</p>
+    <span class="coin r" aria-hidden="true">G2C</span>
+  </header>
+  <button class="btn ghost small studio-btn" onclick="openStudios()">For game studios</button>
+
+  <main id="main"></main>
+
+  <div class="below">
+    <div class="note">
+      <h4>Lightning Network</h4>
+      <p>Real sats move between the players' own wallets. The game never touches money.</p>
+    </div>
+    <div class="scroll" id="quest" aria-live="polite"></div>
+    <div class="note right">
+      <h4>Concept game skin</h4>
+      <p>Built on the working g2c escrow. Your game, your cards, three API calls.</p>
+    </div>
+  </div>
+</div>
+
+<div class="veil" id="veil" onclick="if (event.target === this) closeDialog()">
+  <div class="dialog frame" id="dialog" role="dialog" aria-modal="true"></div>
+</div>
 
 <script>
-const $ = sel => document.querySelector(sel);
-let me = null, tab = 'market', pendingQR = null, pollTimer = null;
-const lastPayload = {};   // polling baseline — module scope, survives re-renders
+const $ = s => document.querySelector(s);
+const ROLES = ['archmage', 'runeknight', 'ranger'];
+const ROLE_NAME = { archmage: 'Archmage', runeknight: 'Runeknight', ranger: 'Ranger' };
 
-// make errors VISIBLE instead of silently dead buttons
+// ---------------------------------------------------------------- the cards
+const CARDS = {
+  'Ember Drake':         { el: 'fire',   rarity: 'epic',      cost: 6, kind: 'Creature', flavor: 'Its hoard is warm long after the gold has cooled.' },
+  'Frostbound Sentinel': { el: 'frost',  rarity: 'rare',      cost: 4, kind: 'Creature', flavor: 'It has guarded the northern pass for a thousand winters.' },
+  'Moonlit Oracle':      { el: 'arcane', rarity: 'legendary', cost: 7, kind: 'Creature', flavor: 'She reads tomorrow in the silver of tonight.' },
+  'Thornwood Druid':     { el: 'nature', rarity: 'common',    cost: 3, kind: 'Creature', flavor: 'Where she walks, the forest follows.' },
+  'Voidcaller Lich':     { el: 'shadow', rarity: 'epic',      cost: 8, kind: 'Creature', flavor: 'Death was only the first spell it mastered.' },
+  'Sunforged Paladin':   { el: 'light',  rarity: 'rare',      cost: 5, kind: 'Creature', flavor: 'Tempered at dawn, unbroken at dusk.' },
+  'Stormglass Familiar': { el: 'storm',  rarity: 'common',    cost: 2, kind: 'Creature', flavor: 'A pocketful of thunder with a mind of its own.' },
+  'Phoenix Feather':     { el: 'fire',   rarity: 'legendary', cost: 5, kind: 'Relic',    flavor: 'Burn it once, and it remembers how to return.' },
+  'Runebound Golem':     { el: 'earth',  rarity: 'rare',      cost: 6, kind: 'Creature', flavor: 'Every rune a command; every command obeyed.' },
+  'Whispering Grimoire': { el: 'arcane', rarity: 'common',    cost: 1, kind: 'Relic',    flavor: 'Read it aloud and it reads you back.' },
+};
+const cardOf = name => CARDS[name] || { el: 'arcane', rarity: 'common', cost: 1, kind: 'Card', flavor: '' };
+const RARITY = { common: 'Common', rare: 'Rare', epic: 'Epic', legendary: 'Legendary' };
+
+const GLYPH = {
+  fire:   '<svg viewBox="0 0 24 24" fill="#fff3d6"><path d="M12 1.5c.6 3.4 4.8 5.6 4.8 10.6a4.8 4.8 0 0 1-9.6 0c0-2.4 1.3-3.6 1.9-5.6.8 1 1.4 2.2 1.4 3.6 1.2-2.4 1.6-5.4 1.5-8.6zM12 22.5a3 3 0 0 1-3-3c0-1.6 1.3-2.4 1.6-3.8.9.8 1.6 1.7 1.6 2.9.7-.6 1-1.4 1.1-2.4 1 1 1.7 2 1.7 3.3a3 3 0 0 1-3 3z"/></svg>',
+  frost:  '<svg viewBox="0 0 24 24" fill="none" stroke="#f2fbff" stroke-width="1.8" stroke-linecap="round"><path d="M12 2v20M3.3 7l17.4 10M3.3 17L20.7 7M9 3.5l3 2.5 3-2.5M9 20.5l3-2.5 3 2.5M3.6 10.6l3.7-.5-1-3.7M20.4 13.4l-3.7.5 1 3.7M3.6 13.4l3.7.5-1 3.7M20.4 10.6l-3.7-.5 1-3.7"/></svg>',
+  arcane: '<svg viewBox="0 0 24 24" fill="#f6ecff"><path d="M14.5 2.5a9.5 9.5 0 1 0 7 15.9A8 8 0 0 1 14.5 2.5z"/><path d="M17 5l.8 2.2L20 8l-2.2.8L17 11l-.8-2.2L14 8l2.2-.8z"/></svg>',
+  nature: '<svg viewBox="0 0 24 24" fill="#eaffd8"><path d="M20.5 3.5C11 3 4.5 8 4.5 15c0 1.6.4 3 1 4.2L3.5 21l1.1 1.1 2-2C7.9 21 9.4 21.5 11 21.5c6.5 0 10.4-7 9.5-18zM8 18.2c2.5-4.7 5.8-7.6 9-9.5-3.7 2.6-6.4 5.6-8.4 9.9z"/></svg>',
+  shadow: '<svg viewBox="0 0 24 24" fill="#efe4ff"><path d="M12 2C7 2 4 5.6 4 10c0 2.6 1.2 4.4 2.5 5.6V19a1 1 0 0 0 1 1h1.5v-2h1.5v2h3v-2H15v2h1.5a1 1 0 0 0 1-1v-3.4C18.8 14.4 20 12.6 20 10c0-4.4-3-8-8-8zM8.8 13.2a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm6.4 0a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg>',
+  light:  '<svg viewBox="0 0 24 24" fill="#fffbe8"><circle cx="12" cy="12" r="4.6"/><path d="M12 1.5l1.2 4h-2.4zM12 22.5l-1.2-4h2.4zM1.5 12l4-1.2v2.4zM22.5 12l-4 1.2v-2.4zM4.6 4.6l3.7 2-1.7 1.7zM19.4 19.4l-3.7-2 1.7-1.7zM4.6 19.4l2-3.7 1.7 1.7zM19.4 4.6l-2 3.7-1.7-1.7z"/></svg>',
+  storm:  '<svg viewBox="0 0 24 24" fill="#fbfdff"><path d="M13.5 1.5L4.5 13.5h6l-1.5 9 9-12h-6z"/></svg>',
+  earth:  '<svg viewBox="0 0 24 24" fill="none" stroke="#fff4e0" stroke-width="1.8" stroke-linejoin="round"><path d="M12 2.5l8.2 4.75v9.5L12 21.5l-8.2-4.75v-9.5z"/><path d="M12 7v10M8.5 9.5l7 5M15.5 9.5l-7 5" stroke-linecap="round"/></svg>',
+};
+const CREST = {
+  archmage:   '<svg viewBox="0 0 48 48" fill="#f3dc9b" stroke="#5a4317" stroke-width="1.2"><path d="M24 3l2.2 6.6h6.9l-5.6 4.1 2.1 6.6L24 16.2l-5.6 4.1 2.1-6.6-5.6-4.1h6.9z"/><path d="M22.6 18h2.8l1.4 26h-5.6z"/><circle cx="24" cy="12" r="2.2" fill="#9fe3a4"/></svg>',
+  runeknight: '<svg viewBox="0 0 48 48" fill="#e7e2d6" stroke="#2b2b30" stroke-width="1.4"><path d="M24 4c8 0 14 6 14 14v8c0 7-5 13-14 18C15 39 10 33 10 26v-8C10 10 16 4 24 4z"/><path d="M15 21h18v4H15z" fill="#2b2b30"/><path d="M22.5 25h3v10h-3z" fill="#2b2b30"/><path d="M24 4c3 0 5 1 6.5 2.5L24 9l-6.5-2.5C19 5 21 4 24 4z" fill="#b8322a" stroke="none"/></svg>',
+  ranger:     '<svg viewBox="0 0 48 48" fill="none" stroke="#f3dc9b" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5c15 6 15 32 0 38" stroke-width="3"/><path d="M15 5v38" stroke-width="1.2"/><path d="M7 24h33" stroke-width="2.4"/><path d="M34 18.5l6.5 5.5-6.5 5.5" stroke-width="2.4"/><path d="M7 24l-3-3.5M7 24l-3 3.5" stroke-width="2"/></svg>',
+};
+const BOLT = '<svg viewBox="0 0 24 24"><path d="M13.5 1.5L4.5 13.5h6l-1.5 9 9-12h-6z"/></svg>';
+const LOCK = '<svg viewBox="0 0 24 24"><path d="M7 10V7a5 5 0 0 1 10 0v3h1.5a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V11a1 1 0 0 1 1-1zm2.5 0h5V7a2.5 2.5 0 0 0-5 0z"/></svg>';
+
+// ---------------------------------------------------------------- state
+let sess = sessionStorage.getItem('g2c_session'), me = null;
+let items = [], market = [], trade = null, sold = null, logs = [], lastData = '', prevMine = null;
+let filt = { rarity: 'all', sort: 'new' }, newRole = 'archmage';
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const sats = msat => (msat / 1000).toLocaleString('en-US', { maximumFractionDigits: 3 });
+const LNADDR = /^[\w.\-+]+@[\w.\-]+(\.[\w\-]+)+$/;
+
 function showErr(msg) {
-  const e = $('#err'); if (!e) return;
-  e.innerHTML = msg; e.style.display = 'block';
-  setTimeout(() => e.style.display = 'none', 8000);
+  const e = $('#err'); e.textContent = msg; e.style.display = 'block';
+  clearTimeout(showErr.t); showErr.t = setTimeout(() => e.style.display = 'none', 7000);
 }
-window.addEventListener('error', ev => showErr('JS error: ' + ev.message));
-const errText = e => typeof e === 'string' ? e : (e && e.message ? e.message : JSON.stringify(e));
-window.addEventListener('unhandledrejection', ev =>
-  showErr('Async error: ' + errText(ev.reason)));
+window.addEventListener('error', ev => showErr('Something went wrong: ' + ev.message));
+window.addEventListener('unhandledrejection', ev => showErr(ev.reason && ev.reason.message || String(ev.reason)));
 
 async function api(path, opts = {}) {
-  const sess = sessionStorage.getItem('g2c_session');
-  const headers = {'Content-Type':'application/json'};
+  const headers = { 'Content-Type': 'application/json' };
   if (sess) headers['X-Player-Session'] = sess;
   const r = await fetch(path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
-  if (r.status === 401) { me = null; render(); throw new Error('unauth'); }
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body.detail || r.status);
+  if (r.status === 401 && path !== '/v1/players') { leave(); throw new Error('your session ended, sign in again'); }
+  if (!r.ok) throw new Error(typeof body.detail === 'string' ? body.detail : ('HTTP ' + r.status));
   return body;
 }
+const log = (html, cls = '') => { logs.unshift({ html, cls }); logs = logs.slice(0, 14); };
+const mine = () => me ? items.filter(i => i.owner_id === me.id) : [];
 
-function fmt(msat) { return (msat/1000).toLocaleString() + ' sats'; }
+// ---------------------------------------------------------------- character
+function renderCreate() {
+  $('#main').innerHTML = `<section class="create frame" aria-label="Create your character">
+    <h2>Create your character</h2>
+    <div class="sub">Name your trader, link the Lightning wallet your sales are paid to, and receive five starter cards.</div>
+    <div class="create-grid">
+      <label class="field"><span>Name</span><input id="c-name" type="text" maxlength="24" autocomplete="username" placeholder="e.g. Morwen the Bold"></label>
+      <label class="field"><span>Password</span><input id="c-pass" type="password" autocomplete="current-password" placeholder="4+ characters"></label>
+      <label class="field wide"><span>Lightning address (sales are paid here)</span><input id="c-ln" type="text" autocomplete="off" placeholder="name@walletofsatoshi.com"></label>
+    </div>
+    <div class="sec" style="margin-top:6px"><span>Class</span></div>
+    <div class="roles">${ROLES.map(r => `<button class="role ${r === newRole ? 'on' : ''}" onclick="pickRole('${r}')" aria-pressed="${r === newRole}">
+      <span class="crest ${r}">${CREST[r]}</span>${ROLE_NAME[r]}</button>`).join('')}</div>
+    <div class="actions"><button class="btn" onclick="createCharacter()">Enter the realm</button>
+      <span class="hint">Returning? Use the same name and password; your cards are waiting.</span></div>
+  </section>`;
+  $('#c-name').focus();
+  for (const id of ['#c-name', '#c-pass', '#c-ln']) $(id).addEventListener('keydown', e => { if (e.key === 'Enter') createCharacter(); });
+}
+function pickRole(r) {
+  newRole = r;
+  document.querySelectorAll('.role').forEach(b => { const on = b.textContent.trim() === ROLE_NAME[r]; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+}
+async function createCharacter() {
+  const name = $('#c-name').value.trim(), password = $('#c-pass').value, ln = $('#c-ln').value.trim();
+  if (!name) return showErr('Give your character a name');
+  if (password.length < 4) return showErr('Choose a password of at least 4 characters');
+  if (ln && !LNADDR.test(ln)) return showErr("That doesn't look like a Lightning address (name@domain)");
+  try {
+    const p = await api('/v1/players', { method: 'POST', body: JSON.stringify({ name, password, ln_address: ln || null, role: newRole }) });
+    sess = p.session; me = p; sessionStorage.setItem('g2c_session', sess);
+    prevMine = null; logs = []; log('Entered the realm.');
+    if (!p.ln_address && !p.nwc_uri) { await afterSignIn(); return openPayout(true); }
+    await afterSignIn();
+  } catch (e) { showErr(e.message === 'wrong password' ? 'That name is taken, or the password is wrong' : e.message); }
+}
+function leave() {
+  sess = null; me = null; trade = null; sold = null; logs = []; prevMine = null;
+  sessionStorage.removeItem('g2c_session'); closeDialog(true); lastData = ''; render(true);
+}
 
-async function render() {
-  const app = $('#app'), nav = $('#nav');
-  clearInterval(pollTimer);
-  if (!me) {
-    nav.hidden = true;
-    app.innerHTML = `<div class="banner"><h2>⚔️ g2c <b>marketplace</b></h2>
-      <p style="color:var(--dim);margin:6px 0 4px">demo game · escrow-powered trading</p>
-      <p class="meta">who are you?</p>
-      <div style="display:flex;gap:10px;justify-content:center;margin-top:10px">
-        <button onclick="loginAs('alice')">🗡 Alice</button>
-        <button onclick="loginAs('bob')">🛡 Bob</button>
-      </div></div>`;
-    return;
+// ---------------------------------------------------------------- rendering
+function cardHTML(it, { click = '', disabled = false, ribbon = '', sealed = false } = {}) {
+  const c = cardOf(it.name);
+  // inert, not disabled: disabled buttons swallow the hover the tooltip needs
+  return `<button class="card r-${c.rarity} e-${c.el} ${sealed ? 'sealed' : ''} ${disabled ? 'inert' : ''}"
+      ${disabled ? 'aria-disabled="true" tabindex="-1"' : ''} ${click && !disabled ? `onclick="${click}"` : ''}
+      data-card="${esc(it.name)}" aria-label="${esc(it.name)}, ${RARITY[c.rarity]}">
+    <span class="art">${GLYPH[c.el]}</span><span class="cost">${c.cost}</span>
+    ${sealed ? `<span class="seal">${LOCK}</span>` : ''}${ribbon ? `<span class="ribbon">${ribbon}</span>` : ''}
+  </button>`;
+}
+function badgeHTML() {
+  if (me.ln_address) return `<button class="badge" onclick="openPayout()" title="${esc(me.ln_address)}">${BOLT} Lightning address linked</button>`;
+  if (me.nwc_uri) return `<button class="badge" onclick="openPayout()">${BOLT} Wallet connected (NWC)</button>`;
+  return `<button class="badge unset" onclick="openPayout()">${BOLT} Link a wallet to sell</button>`;
+}
+
+function panelHTML() {
+  const cards = mine();
+  const slots = cards.map(it => cardHTML(it, { click: `openCard(${it.id})`,
+    ribbon: it.listing_status === 'open' ? sats(it.price_msat) : '', sealed: it.listing_status === 'in_flight' }));
+  while (slots.length < Math.max(10, Math.ceil(cards.length / 5) * 5)) slots.push('<div class="slot"></div>');
+  const role = me.role || 'archmage';
+  return `<section class="panel frame me-here" aria-label="Your character">
+    <div class="head">
+      <div class="crest ${role}">${CREST[role]}</div>
+      <div class="who"><h2 class="${role}">${esc(me.name)}</h2><div class="title">${ROLE_NAME[role]} of the realm</div>${badgeHTML()}</div>
+    </div>
+    <div class="rule"></div>
+    <div class="sec"><span>Your cards</span><span>${cards.length}</span></div>
+    <div class="bag">${slots.join('')}</div>
+    <div class="sec spaced"><span>Activity</span><button class="btn ghost small" style="letter-spacing:.1em" onclick="leave()">Leave</button></div>
+    <ul class="log">${(logs.length ? logs : [{ html: 'In the realm.' }]).map(l => `<li class="${l.cls || ''}">${l.html}</li>`).join('')}</ul>
+  </section>`;
+}
+
+const STEP_ORDER = ['AWAITING_PAYMENT', 'HTLC_HELD', 'RESERVING', 'PAYING_SELLER', 'SETTLING', 'COMMITTING', 'COMPLETED'];
+const STEP_LABEL = { AWAITING_PAYMENT: 'waiting for your payment', HTLC_HELD: 'payment locked', RESERVING: 'sealing the card',
+  PAYING_SELLER: 'paying the seller', SETTLING: 'claiming your payment', COMMITTING: 'delivering the card', COMPLETED: 'delivered' };
+
+function mineStripHTML() {
+  const rows = [];
+  if (trade && !trade.done) rows.push(`<div class="mine-row"><span><b>${esc(trade.card)}</b> · <span class="st live">buying: ${STEP_LABEL[trade.state] || 'in progress'}</span></span>
+    <button class="btn ghost small" onclick="renderTrade(true)">View</button></div>`);
+  for (const it of mine()) {
+    if (it.listing_status === 'in_flight') rows.push(`<div class="mine-row"><span><b>${esc(it.name)}</b> · <span class="st sealed">sealed: a trader is buying it</span></span><span class="st">${sats(it.price_msat)} sats</span></div>`);
+    else if (it.listing_status === 'open') rows.push(`<div class="mine-row"><span><b>${esc(it.name)}</b> · <span class="st">on offer</span></span>
+      <span><span class="st">${sats(it.price_msat)} sats</span> <button class="btn ghost small" onclick="unlist(${it.listing_id})">Withdraw</button></span></div>`);
   }
-  nav.hidden = false;
-  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
-  if (tab === 'market') await viewMarket();
-  if (tab === 'inv') await viewInv();
-  // banner AFTER the views render (views replace #app innerHTML wholesale)
-  const payout = me.ln_address ? '⚡ ' + me.ln_address
-                : me.nwc_uri    ? '⚡ NWC wallet connected'
-                : '⚡ payout not set — tap to add';
-  app.insertAdjacentHTML('afterbegin',
-    `<header><div><b>${me.name}</b><br><span class="meta" style="cursor:pointer" onclick="openProfile()">${payout}</span></div>` +
-    `<div><button class="ghost" style="padding:4px 10px;font-size:.8rem" onclick="switchPlayer()">switch</button></div></header>`);
-  // diff-aware polling: re-render only when the view data actually changed,
-  // and never while the user is typing
-  clearInterval(pollTimer);
-  pollTimer = setInterval(async () => {
-    if (pendingQR) return watchPurchase(true);
-    if (tab === 'profile') return;
+  return rows.length ? `<div class="mine-strip"><h4>Your trades</h4>${rows.join('')}</div>` : '';
+}
+
+function offersHTML() {
+  let rows = market.filter(l => filt.rarity === 'all' || cardOf(l.item_name).rarity === filt.rarity);
+  if (filt.sort === 'low') rows = [...rows].sort((a, b) => a.price_msat - b.price_msat);
+  if (filt.sort === 'high') rows = [...rows].sort((a, b) => b.price_msat - a.price_msat);
+  const body = rows.map(l => {
+    const c = cardOf(l.item_name), own = me && l.seller_name === me.name;
+    const act = own ? '<span class="pillflag">Your offer</span>'
+      : trade && !trade.done ? '<span class="pillflag">Finish your trade first</span>'
+      : `<button class="btn ember small" onclick="buy(${l.id})">Buy</button>`;
+    return `<div class="offer r-${c.rarity}">
+      <div class="item">${cardHTML({ name: l.item_name }, { disabled: true })}<div class="nm"><b>${esc(l.item_name)}</b><span>${RARITY[c.rarity]} ${c.kind}</span></div></div>
+      <div class="seller">${esc(l.seller_name)}</div>
+      <div class="price">${sats(l.price_msat)}<small>sats</small></div>
+      <div class="act">${act}</div></div>`;
+  }).join('');
+  return body || `<div class="empty"><h3>No offers ${market.length ? 'match' : 'yet'}</h3>
+    <p>${market.length ? 'Try another rarity' : 'Cards any trader puts up for sale appear here'}</p></div>`;
+}
+
+function boardHTML() {
+  const chips = ['all', 'common', 'rare', 'epic', 'legendary'].map(r =>
+    `<button class="chip ${filt.rarity === r ? 'on' : ''}" onclick="setFilter('rarity','${r}')">${r === 'all' ? 'All' : RARITY[r]}</button>`).join('');
+  return `<section class="board frame" aria-label="Open offers">
+    <div class="board-tag">Open offers</div>
+    ${mineStripHTML()}
+    <div class="toolbar"><div class="chips">${chips}</div>
+      <select aria-label="Sort offers" onchange="setFilter('sort', this.value)">
+        <option value="new" ${filt.sort === 'new' ? 'selected' : ''}>Newest first</option>
+        <option value="low" ${filt.sort === 'low' ? 'selected' : ''}>Price: low to high</option>
+        <option value="high" ${filt.sort === 'high' ? 'selected' : ''}>Price: high to low</option></select></div>
+    <div class="cols"><span>Card</span><span>Trader</span><span>Price</span><span></span></div>
+    <div class="offers">${offersHTML()}</div>
+    <div class="board-foot">Prices in sats, paid from the Lightning wallet each player already uses</div>
+  </section>`;
+}
+function setFilter(k, v) { filt[k] = v; render(true); }
+
+function questStep() {
+  if (!me) return [1, `<em>Create your character.</em> Pick a name, link the Lightning address your sales are paid to, and receive five starter cards.`];
+  if (trade) {
+    if (trade.done === 'completed') return [6, `<em>The ${esc(trade.card)} is yours.</em> The seller was paid straight into their own wallet, and the card moved only once the payment was final. The game never held a single sat.`];
+    if (trade.done === 'cancelled') return [6, `<em>The trade was released.</em> The card stayed with the seller and Lightning returned your payment. Nothing moved.`];
+    if (STEP_ORDER.indexOf(trade.state) <= 0) return [4, `<em>Pay from your own wallet.</em> Scan the code with any Lightning wallet, or tap it in this demo. The payment is locked at the escrow, not yet claimed.`];
+    return [5, `<em>The escrow at work.</em> The card is sealed so nobody can move it, the seller is paid, your payment is claimed, and only then does the card change hands.`];
+  }
+  if (sold) return [6, `<em>Sold!</em> Your ${esc(sold.card)} sold for ${sats(sold.price)} sats, and the proceeds went straight to your Lightning wallet. The card left your collection only after the payment was final.`];
+  const sealed = mine().find(i => i.listing_status === 'in_flight');
+  if (sealed) return [5, `<em>A trader is buying your ${esc(sealed.name)}.</em> The card is sealed in your collection: it can't be sold twice or lost while the escrow pays you.`];
+  if (mine().some(i => i.listing_status === 'open')) return [3, `<em>Your card is on the market.</em> Any trader can buy it now. Meanwhile, browse the offers and buy a card yourself.`];
+  if (market.some(l => l.seller_name !== me.name)) return [3, `<em>Trade a card.</em> Buy one of the offers, or click one of your own cards to put it up for sale.`];
+  return [2, `<em>Put a card up for trade.</em> Click one of your cards and name a price in sats.`];
+}
+function renderQuest() {
+  const [n, text] = questStep();
+  $('#quest').innerHTML = `<div class="qhead"><span class="q">Quest: a card for sats</span><span class="n">Step ${n} of 6</span></div><div class="qtext">${text}</div>`;
+}
+
+function render(force = false) {
+  const data = JSON.stringify([!!me, me && [me.name, me.ln_address, me.nwc_uri], items, market, logs, filt, sold, trade && [trade.state, trade.done]]);
+  if (!force && data === lastData) return;
+  lastData = data;
+  if (!me) { if (!$('#main .create')) renderCreate(); }
+  else {
     const ae = document.activeElement;
-    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;
-    try {
-      let data;
-      if (tab === 'market') data = [await api('/v1/market'), await api('/v1/items')];
-      else if (tab === 'inv') data = await api('/v1/items');
-      else return;
-      const j = JSON.stringify(data);
-      if (lastPayload[tab] === j) return;   // nothing changed -> no re-render
-      lastPayload[tab] = j;
-      render();
-    } catch (e) { /* transient */ }
-  }, 2000);
-}
-
-async function viewMarket() {
-  const market = await api('/v1/market');
-  $('#app').innerHTML = `
-    <h3 style="margin:6px 0 10px">Market</h3>
-    ${market.length ? market.map(l => `
-      <div class="card"><div>${l.item_name}<br><span class="meta">seller: ${l.seller_name}</span></div>
-      <div style="text-align:right"><div class="price">${fmt(l.price_msat)}</div>
-      <button ${l.seller_name===me.name?'disabled':''} onclick="buy(${l.id})">${l.seller_name===me.name?'yours':'Buy'}</button></div></div>`).join('')
-    : `<div class="empty">nothing for sale yet — list an item from your inventory</div>`}`;
-}
-async function viewInv() {
-  const items = await api('/v1/items');
-  const mine = items.filter(i => i.owner_id === me.id);
-  $('#app').innerHTML = `<h3 style="margin:6px 0 10px">Inventory (${mine.length})</h3>` +
-    (mine.map(i => i.listing_id
-      ? `<div class="card"><div>${i.name}<br><span class="pill pending">listed · ${fmt(i.price_msat)}</span></div>
-         ${i.listing_status==='open' ? `<button class="ghost" onclick="unlist(${i.listing_id})">Unlist</button>` : `<span class="pill">in flight</span>`}</div>`
-      : `<div class="card"><div>${i.name}</div>
-         <div style="display:flex;gap:6px"><input id="p${i.id}" type="number" placeholder="sats" style="width:90px">
-         <button onclick="list(${i.id})">Sell</button></div></div>`
-    ).join('') || `<div class="empty">nothing here yet</div>`);
-}
-
-function switchPlayer() {
-  sessionStorage.removeItem('g2c_session');
-  me = null; pendingQR = null; render();
-}
-
-async function loginAs(name) {
-  const password = prompt(`Password for ${name} (the first login sets it, 4+ characters)`);
-  if (password === null) return;
-  try {
-    me = await api('/v1/players', {method:'POST', body: JSON.stringify({name, password})});
-    sessionStorage.setItem('g2c_session', me.session);  // per-TAB session
-    render();
-  } catch (e) {
-    showErr('Login failed: ' + (e.message === 'unauth' ? 'wrong password' : e.message));
+    if (ae && ae.tagName === 'SELECT' && $('#main').contains(ae)) return;   // don't yank an open dropdown
+    $('#main').className = 'realm';
+    $('#main').innerHTML = panelHTML() + boardHTML();
   }
+  if (!me) $('#main').className = '';
+  renderQuest();
 }
 
-function openProfile() {
-  tab = 'profile';
-  clearInterval(pollTimer);
-  $('#app').innerHTML = `
-    <h3 style="margin:6px 0 10px">Payout settings</h3>
-    <div class="card" style="flex-direction:column;align-items:stretch;gap:8px">
-      <div>Sales proceeds go to YOUR wallet — the game never holds sats.</div>
-      <label class="meta">Lightning address (LUD-16)</label>
-      <input id="lnaddr" type="text" placeholder="satoshi@walletofsatoshi.com" value="${me.ln_address || ''}">
-      <label class="meta">…or Nostr Wallet Connect URI</label>
-      <input id="nwcuri" type="text" placeholder="nostr+walletconnect://…" value="${me.nwc_uri || ''}">
-      <label class="meta">Admin token (required on live deployments)</label>
-      <input id="admintoken" type="password" placeholder="admin token" value="${localStorage.getItem('g2c_admin_token') || ''}">
-      <div style="display:flex;gap:8px">
-        <button onclick="saveProfile()">Save</button>
-        <button class="ghost" onclick="tab='inv';render()">Cancel</button>
-      </div>
-    </div>`;
+// ---------------------------------------------------------------- what changed on my side
+function diffActivity(nextItems) {
+  if (!me) return;
+  const next = nextItems.filter(i => i.owner_id === me.id);
+  if (!prevMine) { prevMine = next; return; }
+  const before = Object.fromEntries(prevMine.map(i => [i.id, i])), now = Object.fromEntries(next.map(i => [i.id, i]));
+  for (const b of prevMine) if (!now[b.id]) {                    // left my collection: sold
+    sold = { card: b.name, price: b.price_msat || 0 };
+    log(`Sold <b>${esc(b.name)}</b> to a trader for ${sats(b.price_msat || 0)} sats. The proceeds went straight to your wallet.`, 'good');
+  }
+  for (const it of next) {
+    const b = before[it.id];
+    if (!b) { log(`<b>${esc(it.name)}</b> joined your collection.`, 'good'); continue; }
+    if (b.listing_status === it.listing_status) continue;
+    if (it.listing_status === 'open' && !b.listing_status) log(`Offered <b>${esc(it.name)}</b> for ${sats(it.price_msat)} sats.`);
+    else if (it.listing_status === 'in_flight') log(`A trader is buying your <b>${esc(it.name)}</b>. Card sealed.`);
+    else if (b.listing_status === 'in_flight' && it.listing_status === 'open') log(`The trade for <b>${esc(it.name)}</b> fell through; it's back on offer.`, 'warn');
+    else if (b.listing_status === 'open' && !it.listing_status) log(`Withdrew the offer for <b>${esc(it.name)}</b>.`);
+  }
+  prevMine = next;
 }
 
-async function saveProfile() {
-  const token = $('#admintoken').value;
-  localStorage.setItem('g2c_admin_token', token);
+async function refresh() {
   try {
-    me = await api('/v1/players/me', {method:'PUT',
-      headers: token ? {'X-Admin-Token': token} : {},
-      body: JSON.stringify({
-      ln_address: $('#lnaddr').value, nwc_uri: $('#nwcuri').value })});
-    tab = 'inv'; render();
-  } catch (e) { showErr('Save failed: ' + errText(e)); }
+    const [its, mkt] = await Promise.all([api('/v1/items'), api('/v1/market')]);
+    diffActivity(its); items = its; market = mkt;
+    render();
+  } catch (e) { /* transient: next poll retries */ }
+  if (trade && !trade.done) watchTrade();
+}
+async function afterSignIn() { prevMine = null; await refresh(); render(true); }
+
+// ---------------------------------------------------------------- dialogs
+function openDialog(html) { $('#dialog').innerHTML = `<button class="x" aria-label="Close" onclick="closeDialog()">×</button>` + html; $('#veil').classList.add('open'); }
+function closeDialog(silent) {
+  $('#veil').classList.remove('open');
+  if (!silent && trade && trade.done) { trade = null; render(true); }
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#veil').classList.contains('open')) closeDialog(); });
+
+function bigCard(name, ribbon = '') {
+  const c = cardOf(name);
+  return `<div class="bigcard">${cardHTML({ name }, { disabled: true, ribbon })}<div><div class="flavor">“${esc(c.flavor)}”</div></div></div>`;
 }
 
+function openCard(id) {
+  const it = items.find(i => i.id === id); if (!it) return;
+  const c = cardOf(it.name);
+  sold = null;
+  const head = `<h3>${esc(it.name)}</h3><div class="sub">${RARITY[c.rarity]} ${c.kind} · ${c.el[0].toUpperCase() + c.el.slice(1)} · ${c.cost} mana</div>`;
+  if (it.listing_status === 'in_flight') return openDialog(`${head}<div class="split">${bigCard(it.name)}<div>
+    <p class="hint">A trader is buying this card. It is sealed: nobody can move it until the escrow hands it to the buyer after paying you, or releases it back to you.</p></div></div>`);
+  if (it.listing_status === 'open') return openDialog(`${head}<div class="split">${bigCard(it.name, sats(it.price_msat))}<div>
+    <div class="bigprice">${sats(it.price_msat)} sats</div><p class="split-fee">On offer at the Trading Post.</p>
+    <div class="actions"><button class="btn ghost" onclick="unlist(${it.listing_id})">Withdraw offer</button></div></div></div>`);
+  const linked = me.ln_address || me.nwc_uri;
+  openDialog(`${head}<div class="split">${bigCard(it.name)}<div>
+    <label class="field"><span>Price in sats</span><input id="price" type="number" min="1" inputmode="numeric" placeholder="e.g. 21000"></label>
+    <p class="hint" style="margin-bottom:12px">${linked ? 'When it sells, the sats go straight to your own Lightning wallet.' : 'Link a Lightning wallet first, so the sats have somewhere to go.'}</p>
+    <div class="actions">${linked ? `<button class="btn" onclick="list(${it.id})">Put on offer</button>` : `<button class="btn" onclick="openPayout()">Link a wallet</button>`}</div></div></div>`);
+  const inp = $('#price'); if (inp) { inp.focus(); inp.addEventListener('keydown', e => { if (e.key === 'Enter') list(it.id); }); }
+}
 async function list(id) {
-  const sats = parseInt($(`#p${id}`).value); if (!sats || sats <= 0) return alert('enter a price');
-  try { await api('/v1/listings', {method:'POST', body: JSON.stringify({item_id:id, price_msat:sats*1000})}); } catch(e){ showErr(e.message); }
-  render();
+  const v = parseInt($('#price').value, 10);
+  if (!v || v <= 0) return showErr('Enter a price in sats');
+  try { await api('/v1/listings', { method: 'POST', body: JSON.stringify({ item_id: id, price_msat: v * 1000 }) }); closeDialog(); refresh(); }
+  catch (e) { showErr(e.message); }
 }
-async function unlist(id) { try { await api(`/v1/listings/${id}`, {method:'DELETE'}); } catch(e){ showErr(e.message); } render(); }
+async function unlist(listingId) {
+  try { await api(`/v1/listings/${listingId}`, { method: 'DELETE' }); closeDialog(); refresh(); }
+  catch (e) { showErr(e.message); }
+}
 
+function openPayout(firstTime) {
+  openDialog(`<h3>${firstTime ? 'Link your wallet' : 'Your wallet'}</h3><div class="sub">Sales go straight to this wallet. The game never holds sats.</div>
+    <label class="field"><span>Lightning address</span><input id="lnaddr" type="text" placeholder="name@walletofsatoshi.com" value="${esc(me.ln_address)}"></label>
+    <label class="field"><span>…or Nostr Wallet Connect</span><input id="nwcuri" type="text" placeholder="nostr+walletconnect://…" value="${esc(me.nwc_uri)}"></label>
+    <div class="actions"><button class="btn" onclick="savePayout()">Save</button><button class="btn ghost" onclick="closeDialog()">${firstTime ? 'Later' : 'Cancel'}</button></div>`);
+  $('#lnaddr').focus();
+}
+async function savePayout() {
+  const ln = $('#lnaddr').value.trim();
+  if (ln && !LNADDR.test(ln)) return showErr("That doesn't look like a Lightning address (name@domain)");
+  try {
+    me = { ...me, ...(await api('/v1/players/me', { method: 'PUT', body: JSON.stringify({ ln_address: ln, nwc_uri: $('#nwcuri').value }) })) };
+    log('Linked a Lightning wallet.'); closeDialog(); render(true);
+  } catch (e) { showErr('Save failed: ' + e.message); }
+}
+
+// ---------------------------------------------------------------- buying
+const STEPS = [
+  ['Payment locked', 'held at the escrow, not yet claimed'],
+  ['Card sealed', "frozen in the seller's collection"],
+  ['Seller paid', 'sats sent to their own wallet'],
+  ['Payment claimed', 'your payment is now final'],
+  ['Card delivered', 'ownership changes, once'],
+];
 async function buy(listingId) {
-  const sale = await api('/v1/purchases', {method:'POST', body: JSON.stringify({listing_id: listingId})});
-  showQR(sale);
+  const l = market.find(m => m.id === listingId); if (!l) return;
+  sold = null;
+  try {
+    const sale = await api('/v1/purchases', { method: 'POST', body: JSON.stringify({ listing_id: listingId }) });
+    trade = { ...sale, seller: l.seller_name, card: l.item_name, price: l.price_msat, state: 'AWAITING_PAYMENT', paid: false, done: null };
+    log(`Buying <b>${esc(l.item_name)}</b> for ${sats(l.price_msat)} sats.`);
+    renderTrade(true); render(true);
+  } catch (e) { showErr('Could not start the trade: ' + e.message); refresh(); }
 }
 
-function showQR(sale) {
-  pendingQR = sale; pendingQR.paid = false;
-  $('#app').innerHTML = `<h3 style="margin:6px 0 10px">Complete payment</h3>
-    <div class="card" style="flex-direction:column; align-items:stretch">
-      <div id="qrbox"><div id="qr" style="cursor:pointer" title="tap to simulate wallet payment"
-        onclick="payQR()"></div>
-        <div class="pill pending" id="pstate">tap the QR to pay (lab) — or scan it with your Lightning wallet</div>
-        <div class="mono">${sale.payment_request}</div>
-        <button class="ghost" onclick="pendingQR=null;render()">close</button>
-      </div>
-    </div>`;
-  if (typeof QRCode !== 'undefined') {
-    new QRCode($('#qr'), { text: sale.payment_request, width: 220, height: 220 });
-  } else {
-    $('#qr').innerHTML = '<div class="mono">QR library unavailable (offline?) — payment request shown as text</div>';
+function renderTrade(fresh = false) {
+  if (!trade) return;
+  const i = Math.max(0, STEP_ORDER.indexOf(trade.state || 'AWAITING_PAYMENT'));
+  const failed = trade.done === 'cancelled';
+  const steps = STEPS.map(([t, d], k) => {
+    const cls = failed ? (k === 0 ? 'done' : '') : (i >= k + 2 || trade.done === 'completed') ? 'done' : (i === k + 1 ? 'active' : '');
+    return `<li class="step ${cls}"><span class="dot"></span><div><b>${t}</b><span>${d}</span></div></li>`;
+  }).join('');
+  const waiting = i === 0 && !trade.done;
+  const outcome = trade.done === 'completed' ? `<div class="outcome good">The ${esc(trade.card)} is yours.</div>`
+    : failed ? `<div class="outcome bad">Trade released: the card stays with the seller and your payment was returned.</div>` : '';
+  const html = `<h3>Trade · ${esc(trade.card)}</h3><div class="sub">Buying from ${esc(trade.seller)} through the g2c escrow</div>
+    <div class="split">${bigCard(trade.card)}<div>
+      <div class="bigprice">${sats(trade.price)} sats</div>
+      <p class="split-fee">The seller receives ${sats(trade.seller_amount_msat)} sats · escrow fee ${sats(trade.fee_msat)} sats</p>
+      ${waiting ? `<div class="qrwrap"><div id="qr" title="Tap to pay in this demo" onclick="payQR()"></div>
+        <div><p class="hint">${trade.paid ? 'Payment sent, waiting for it to lock…' : 'Scan with any Lightning wallet, or tap the code to pay in this demo.'}</p>
+        <div class="bolt11">${esc(trade.payment_request)}</div></div></div>` : ''}
+      ${outcome}<ol class="steps">${steps}</ol>
+      <div class="actions">${trade.done ? '<button class="btn" onclick="closeDialog()">Back to the Trading Post</button>'
+        : '<button class="btn ghost small" onclick="closeDialog()">Hide (the trade continues)</button>'}</div>
+    </div></div>`;
+  const open = $('#veil').classList.contains('open') && $('#dialog .steps');
+  if (fresh || !open) { if (!fresh && !open) return; openDialog(html); }
+  else {
+    const qr = waiting && $('#qr') && $('#qr').childElementCount ? $('#qr') : null;
+    $('#dialog').innerHTML = `<button class="x" aria-label="Close" onclick="closeDialog()">×</button>` + html;
+    if (qr) $('#qr').replaceWith(qr);
+  }
+  const box = $('#qr');
+  if (box && !box.childElementCount) {
+    if (typeof QRCode !== 'undefined') new QRCode(box, { text: trade.payment_request, width: 168, height: 168, colorDark: '#1a1208', colorLight: '#ffffff' });
+    else box.innerHTML = '<p class="hint" style="color:#333;width:168px">QR library unavailable: use the payment request text</p>';
   }
 }
-
 async function payQR() {
-  if (!pendingQR || pendingQR.paid) return;
-  pendingQR.paid = true;
-  const el = $('#pstate');
-  if (el) { el.textContent = 'paying…'; }
-  try {
-    await api(`/v1/purchases/${pendingQR.payment_hash}/simulate-pay`, {method:'POST'});
-  } catch (e) {
-    pendingQR.paid = false;
-    if (el) el.textContent = 'tap the QR to pay (lab) — or scan it with your Lightning wallet';
-    showErr('Payment failed: ' + e.message);
-    return;
-  }
-  watchPurchase();
+  if (!trade || trade.paid) return;
+  trade.paid = true; renderTrade();
+  try { await api(`/v1/purchases/${trade.payment_hash}/simulate-pay`, { method: 'POST' }); }
+  catch (e) { trade.paid = false; renderTrade(); showErr('Payment failed: ' + e.message); }
+}
+async function watchTrade() {
+  if (!trade || trade.done) return;
+  const s = await api(`/v1/purchases/${trade.payment_hash}`).catch(() => null);
+  if (!s || !trade) return;
+  const before = trade.state;
+  if (s.escrow_state) trade.state = s.escrow_state;
+  if (s.status === 'completed') { trade.done = 'completed'; trade.state = 'COMPLETED'; }
+  else if (s.status === 'cancelled') { trade.done = 'cancelled'; log(`The trade for <b>${esc(trade.card)}</b> was released; your payment was returned.`, 'warn'); }
+  if (trade.state !== before || trade.done) { renderTrade(); render(true); }
 }
 
-async function watchPurchase(silent) {
-  if (!pendingQR) return;
-  const s = await api(`/v1/purchases/${pendingQR.payment_hash}`).catch(() => null);
-  if (!s) return;
-  const el = $('#pstate');
-  if (el) {
-    el.textContent = s.status === 'pending' ? (pendingQR.paid ? 'confirming…' : 'tap the QR to pay (lab) — or scan it with your Lightning wallet')
-                   : s.status === 'completed' ? '✅ paid — item is yours' : '❌ failed — refunded';
-    el.className = 'pill ' + (s.status === 'completed' ? 'ok' : s.status === 'cancelled' ? 'bad' : 'pending');
-  }
-  if (s.status !== 'pending') setTimeout(() => { pendingQR = null; tab = 'inv'; render(); }, 1500);
+// ---------------------------------------------------------------- for studios
+function openStudios() {
+  openDialog(`<h3>Bring the Trading Post to your game</h3>
+    <div class="sub">Let players trade cards and items for bitcoin, safely, inside your game.</div>
+    <div class="pitch">
+      <div><b>No grey market</b><p>Trades happen in your game, under your rules, instead of on third-party sites full of scams.</p></div>
+      <div><b>No money on your servers</b><p>Payments run over Lightning between the players' own wallets and the escrow. You only move items.</p></div>
+      <div><b>Nothing to undo</b><p>An item is frozen first and changes owner once, only after the payment is final. A failed trade simply unfreezes it.</p></div>
+      <div><b>Earn on every resale<span class="proposed">Proposed</span></b><p>A share of each sale can flow to the studio, turning player trading into revenue.</p></div>
+    </div>
+    <div class="calls"><i># your backend answers three calls, keyed by one payment id</i>
+POST /reserve_sale   <i>freeze the item at the seller</i>
+POST /commit_sale    <i>hand it to the buyer (money is final)</i>
+POST /release_sale   <i>unfreeze it (trade failed)</i></div>
+    <p class="hint">This realm is a concept skin over the working escrow: the wallets, invoices and payments are real Lightning.</p>`);
 }
 
-document.querySelectorAll('nav button').forEach(b => b.onclick = () => { tab = b.dataset.tab; pendingQR = null; render(); });
-// restore session for THIS tab (sessionStorage), else browser cookie
+// ---------------------------------------------------------------- card tooltip
+const tip = $('#tip');
+document.addEventListener('mouseover', e => {
+  const el = e.target.closest('[data-card]');
+  if (!el || el.closest('.dialog')) { tip.style.display = 'none'; return; }
+  const n = el.dataset.card, c = cardOf(n);
+  tip.innerHTML = `<b>${esc(n)}</b><span class="meta" style="color:var(--${c.rarity})">${RARITY[c.rarity]} ${c.kind} · ${c.cost} mana</span><i>“${esc(c.flavor)}”</i>`;
+  tip.style.display = 'block';
+});
+document.addEventListener('mousemove', e => {
+  if (tip.style.display !== 'block') return;
+  tip.style.left = Math.min(e.clientX + 16, innerWidth - tip.offsetWidth - 8) + 'px';
+  tip.style.top = Math.min(e.clientY + 16, innerHeight - tip.offsetHeight - 8) + 'px';
+});
+
+// ---------------------------------------------------------------- start
 (async () => {
-  const sess = sessionStorage.getItem('g2c_session');
-  try {
-    me = await api('/v1/players/me');
-    render();
-  } catch (e) {
-    if (sess) sessionStorage.removeItem('g2c_session');
-    render();
+  if (sess) {
+    try { me = await api('/v1/players/me'); log('Back in the realm.'); }
+    catch (e) { sess = null; sessionStorage.removeItem('g2c_session'); }
   }
+  await refresh();
+  render(true);
+  setInterval(refresh, 1500);
 })();
 </script>
 </body>
