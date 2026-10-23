@@ -22,7 +22,7 @@ else
   ESCROW=8001; TIMEOUT=30
 fi
 
-cleanup() { [ -n "$STUB_PID" ] && kill "$STUB_PID" 2>/dev/null || true
+cleanup() { [ -n "$STUB_PID" ] && pkill -f "uvicorn app:app --port $ESCROW" 2>/dev/null || true
             pkill -f "uvicorn app:app --host 0.0.0.0 --port $GAME" 2>/dev/null || true; }
 trap cleanup EXIT
 
@@ -36,7 +36,7 @@ field() { curl -s localhost:$GAME/v1/items | python3 -c "import json,sys; print(
 wait_purchase() {  # wait_purchase <payment_hash> <state>  -> prints final state
   local ph=$1 want=$2 got=""
   for i in $(seq $TIMEOUT); do
-    got=$(curl -s localhost:$GAME/v1/purchases/$ph -H "X-Player-Id: $BOB" | jget "['status']")
+    got=$(curl -s localhost:$GAME/v1/purchases/$ph -H "X-Player-Session: $BOB_S" | jget "['status']")
     [ "$got" = "$want" ] && break
     sleep 1
   done
@@ -68,7 +68,11 @@ done
 curl -sf localhost:$GAME/v1/items > /dev/null || { echo "game failed to boot"; tail /tmp/g2c_game.log; exit 1; }
 fi
 
-g()  { curl -s "localhost:$GAME$1" -H "X-Player-Id: $2" "${@:3}"; }
+login() { curl -s localhost:$GAME/v1/players -X POST -H 'Content-Type: application/json' \
+            -d "{\"name\":\"$1\",\"password\":\"e2e-pass\"}" | jget "['session']"; }
+ALICE_S=$(login alice); BOB_S=$(login bob)
+g()  { local who=$2; [ "$who" = "$ALICE" ] && who=$ALICE_S; [ "$who" = "$BOB" ] && who=$BOB_S
+       curl -s "localhost:$GAME$1" -H "X-Player-Session: $who" "${@:3}"; }
 gs() { curl -s "localhost:$GAME$1" -H "X-Escrow-Secret: dev-secret" "${@:3}"; }
 
 # ---------------------------------------------------------------- happy path

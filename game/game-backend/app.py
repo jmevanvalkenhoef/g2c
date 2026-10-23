@@ -11,8 +11,12 @@ Two hats (kept in ONE process for the PoC, but TWO clearly separated API groups)
 Ownership truth lives in SQLite. execute_sale/rollback_sale are atomic,
 idempotent on payment_hash — that is what makes the escrow's guarantees real.
 """
+import hashlib
+import hmac
 import os
+import secrets
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
@@ -32,6 +36,9 @@ GAME_ADMIN_TOKEN = os.environ.get("GAME_ADMIN_TOKEN", "")  # required for
 # payout edits + world reset when set (mainnet); empty = open (lab/dev)  # lab | real:
 # lab  -> escrow pays the lab's seller node (regtest)
 # real -> escrow resolves the seller's own payout method (lnurl/nwc, signet+)
+# an escrow call that timed out may still have minted an invoice: keep the
+# listing reserved until that invoice can no longer be paid, then reopen it
+AMBIGUOUS_HOLD_S = int(os.environ.get("AMBIGUOUS_HOLD_S", "900"))
 
 ARCHETYPES = [
     "Rusty Sword", "Iron Shield", "Healing Potion", "Elixir of Speed",
@@ -82,7 +89,13 @@ def init_db(drop: bool = False) -> None:
               id    INTEGER PRIMARY KEY,
               name  TEXT UNIQUE NOT NULL,
               ln_address TEXT,                   -- Lightning address (LUD-16)
-              nwc_uri    TEXT                    -- nostr+walletconnect://… (secret-ish)
+              nwc_uri    TEXT,                   -- nostr+walletconnect://… (secret-ish)
+              pw_salt    TEXT,                   -- set on first login (claim)
+              pw_hash    TEXT
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+              token      TEXT PRIMARY KEY,
+              player_id  INTEGER NOT NULL REFERENCES players(id)
             );
             CREATE TABLE IF NOT EXISTS items (
               id      INTEGER PRIMARY KEY,
@@ -94,7 +107,8 @@ def init_db(drop: bool = False) -> None:
               item_id    INTEGER UNIQUE NOT NULL REFERENCES items(id),
               seller_id  INTEGER NOT NULL REFERENCES players(id),
               price_msat INTEGER NOT NULL CHECK (price_msat > 0),
-              status     TEXT NOT NULL DEFAULT 'open'  -- open|in_flight|completed|cancelled
+              status     TEXT NOT NULL DEFAULT 'open', -- open|in_flight|completed|cancelled
+              in_flight_until INTEGER                  -- ambiguous reservation expiry
             );
             -- escrow contract state, idempotency anchored on payment_hash
             CREATE TABLE IF NOT EXISTS sales (
@@ -104,6 +118,7 @@ def init_db(drop: bool = False) -> None:
               seller_id    INTEGER NOT NULL,
               listing_id   INTEGER,                    -- set on execute, used by rollback
               status       TEXT NOT NULL,            -- done|rolled_back
+              final        INTEGER NOT NULL DEFAULT 0, -- escrow reported completed
               created_at   TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS purchases (
@@ -137,29 +152,47 @@ def _startup() -> None:
 # ---------------------------------------------------------------- helpers
 
 async def require_player(request: Request, response: Response) -> dict:
-    """Returns the full player row. Per-TAB sessions (X-Player-Id from
+    """Returns the full player row. Per-TAB sessions (X-Player-Session from
     sessionStorage) take precedence over the cookie, so two tabs in one
-    browser can be two players."""
-    pid = request.headers.get("x-player-id") or request.cookies.get("player_id")
-    if not pid:
+    browser can be two players. The token is a random secret issued at
+    login: a guessable player id must never be a credential."""
+    token = request.headers.get("x-player-session") or request.cookies.get("session")
+    if not token:
         raise HTTPException(401, "no player session")
     with db() as conn:
         row = conn.execute(
-            "SELECT id, name, ln_address, nwc_uri FROM players WHERE id=?",
-            (pid,)).fetchone()
+            "SELECT p.id, p.name, p.ln_address, p.nwc_uri FROM sessions s "
+            "JOIN players p ON p.id = s.player_id WHERE s.token=?",
+            (token,)).fetchone()
     if not row:
-        response.delete_cookie("player_id")
-        raise HTTPException(401, "unknown player")
+        response.delete_cookie("session")
+        raise HTTPException(401, "unknown session")
     return dict(row)
 
 
 def check_secret(x_escrow_secret: Optional[str]) -> None:
-    if SHARED_SECRET and x_escrow_secret != SHARED_SECRET:
+    if SHARED_SECRET and not hmac.compare_digest(
+            (x_escrow_secret or "").encode(), SHARED_SECRET.encode()):
         raise HTTPException(401, "bad escrow secret")
+
+
+def _pw_hash(password: str, salt: str) -> str:
+    return hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt),
+                          n=2**14, r=8, p=1).hex()
+
+
+def release_stale_reservations(conn) -> None:
+    """Reopen listings held for an ambiguous escrow call whose invoice can
+    no longer be paid."""
+    conn.execute(
+        "UPDATE listings SET status='open', in_flight_until=NULL "
+        "WHERE status='in_flight' AND in_flight_until IS NOT NULL "
+        "AND in_flight_until < ?", (int(time.time()),))
 
 
 class PlayerIn(BaseModel):
     name: str
+    password: str
 
 
 class ListingIn(BaseModel):
@@ -194,25 +227,44 @@ class SaleResultIn(BaseModel):
 def admin_reset(x_admin_token: str = Header(default="")):
     """dev/demo: wipe and re-seed the world (fresh Alice/Bob + items)"""
     if GAME_ADMIN_TOKEN and x_admin_token != GAME_ADMIN_TOKEN:
-        raise HTTPException(401, "bad admin token")
+        raise HTTPException(403, "bad admin token")
     init_db(drop=True)
     return {"status": "reset"}
 
 
 @app.post("/v1/players")
 def create_player(body: PlayerIn, response: Response):
+    """Log in, or claim a name: the first login to a name sets its password
+    (seeded players included), every later login must match it."""
+    name = body.name.strip()
+    if not name or len(body.password) < 4:
+        raise HTTPException(422, "name and a password of 4+ characters required")
+    token = secrets.token_urlsafe(32)
     with tx() as conn:
         row = conn.execute(
-            "SELECT id FROM players WHERE name=?", (body.name.strip(),)).fetchone()
-        pid = row["id"] if row else conn.execute(
-            "INSERT INTO players(name) VALUES (?)",
-            (body.name.strip(),)).lastrowid
-    response.set_cookie("player_id", str(pid), httponly=True, samesite="lax")
+            "SELECT id, pw_salt, pw_hash FROM players WHERE name=?", (name,)).fetchone()
+        if row and row["pw_hash"]:
+            if not hmac.compare_digest(_pw_hash(body.password, row["pw_salt"]),
+                                       row["pw_hash"]):
+                raise HTTPException(401, "wrong password")
+            pid = row["id"]
+        else:
+            salt = secrets.token_hex(16)
+            if row:
+                pid = row["id"]
+                conn.execute("UPDATE players SET pw_salt=?, pw_hash=? WHERE id=?",
+                             (salt, _pw_hash(body.password, salt), pid))
+            else:
+                pid = conn.execute(
+                    "INSERT INTO players(name, pw_salt, pw_hash) VALUES (?,?,?)",
+                    (name, salt, _pw_hash(body.password, salt))).lastrowid
+        conn.execute("INSERT INTO sessions(token, player_id) VALUES (?,?)", (token, pid))
+    response.set_cookie("session", token, httponly=True, samesite="lax")
     with db() as conn:
         row = conn.execute(
             "SELECT id, name, ln_address, nwc_uri FROM players WHERE id=?",
             (pid,)).fetchone()
-    return dict(row)
+    return {**dict(row), "session": token}
 
 
 @app.get("/v1/players/me")
@@ -230,7 +282,7 @@ async def update_profile(body: ProfileIn, request: Request, response: Response,
                          x_admin_token: str = Header(default="")):
     # payout methods are money-routing data: edits need the admin token
     if GAME_ADMIN_TOKEN and x_admin_token != GAME_ADMIN_TOKEN:
-        raise HTTPException(401, "payout edits need the admin token")
+        raise HTTPException(403, "payout edits need the admin token")
     pid = (await require_player(request, response))["id"]
     with tx() as conn:
         conn.execute(
@@ -246,7 +298,8 @@ async def update_profile(body: ProfileIn, request: Request, response: Response,
 
 @app.get("/v1/items")
 def items():
-    with db() as conn:
+    with tx() as conn:
+        release_stale_reservations(conn)
         rows = conn.execute(
             """SELECT i.id, i.name, i.owner_id, p.name AS owner_name,
                       l.id AS listing_id, l.price_msat, l.status AS listing_status
@@ -261,6 +314,13 @@ def items():
 async def create_listing(body: ListingIn, request: Request, response: Response):
     seller = (await require_player(request, response))["id"]
     with tx() as conn:
+        release_stale_reservations(conn)
+        # an item received in a sale the escrow hasn't finalised yet can
+        # still be rolled back to its seller: it must not be resold before
+        if conn.execute(
+                "SELECT 1 FROM sales WHERE item_id=? AND status='done' AND final=0",
+                (body.item_id,)).fetchone():
+            raise HTTPException(409, "item is still settling from its last sale")
         # purge old listing rows for this item (completed/cancelled) so the
         # UNIQUE(item_id) constraint allows re-listing for back-and-forth trades
         conn.execute(
@@ -291,7 +351,8 @@ async def cancel_listing(listing_id: int, request: Request, response: Response):
 
 @app.get("/v1/market")
 def market():
-    with db() as conn:
+    with tx() as conn:
+        release_stale_reservations(conn)
         rows = conn.execute(
             """SELECT l.id, l.item_id, l.price_msat, i.name AS item_name,
                       p.name AS seller_name
@@ -307,17 +368,21 @@ async def purchase(body: PurchaseIn, request: Request, response: Response):
     return a payment request. Game never touches sats."""
     buyer = (await require_player(request, response))["id"]
     with tx() as conn:
+        release_stale_reservations(conn)
         row = conn.execute(
             """SELECT l.item_id, l.seller_id, l.price_msat
                FROM listings l WHERE l.id=? AND l.status='open'""",
             (body.listing_id,)).fetchone()
         if not row:
             raise HTTPException(409, "listing not open")
+        if row["seller_id"] == buyer:
+            raise HTTPException(409, "you can't buy your own listing")
         seller = conn.execute(
             "SELECT ln_address, nwc_uri FROM players WHERE id=?",
             (row["seller_id"],)).fetchone()
         conn.execute(
-            "UPDATE listings SET status='in_flight' WHERE id=?", (body.listing_id,))
+            "UPDATE listings SET status='in_flight', in_flight_until=NULL WHERE id=?",
+            (body.listing_id,))
     if PAYOUT_MODE == "real":
         if not (seller and (seller["ln_address"] or seller["nwc_uri"])):
             with tx() as c2:      # reopen the listing before refusing
@@ -336,18 +401,27 @@ async def purchase(body: PurchaseIn, request: Request, response: Response):
         "seller_payout": seller_payout,
     }
     headers = {"X-Escrow-Secret": SHARED_SECRET} if SHARED_SECRET else {}
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(f"{ESCROW_URL}/v1/sales", json=payload, headers=headers)
-    if r.status_code >= 400:
-        # 4xx = definitive refusal by the escrow -> listing back to open.
-        # 5xx/timeout = AMBIGUOUS (the real contract mirrors this): leave in_flight;
-        # the escrow's execute_sale / rollback / webhook will resolve it.
-        if 400 <= r.status_code < 500:
-            with tx() as conn:
-                conn.execute(
-                    "UPDATE listings SET status='open' WHERE id=?", (body.listing_id,))
-            raise HTTPException(409, f"escrow refused: {r.text}")
-        raise HTTPException(502, f"escrow unreachable/ambiguous: {r.text}")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(f"{ESCROW_URL}/v1/sales", json=payload, headers=headers)
+    except httpx.HTTPError as e:
+        r, err = None, str(e)
+    if r is not None and 400 <= r.status_code < 500:
+        # definitive refusal by the escrow -> listing back to open
+        with tx() as conn:
+            conn.execute(
+                "UPDATE listings SET status='open' WHERE id=?", (body.listing_id,))
+        raise HTTPException(409, f"escrow refused: {r.text}")
+    if r is None or r.status_code >= 500:
+        # AMBIGUOUS: the escrow may have minted an invoice we never saw, and
+        # it would never tell us about it. Keep the listing reserved until
+        # such an invoice must have expired, then it reopens by itself.
+        with tx() as conn:
+            conn.execute(
+                "UPDATE listings SET in_flight_until=? WHERE id=?",
+                (int(time.time()) + AMBIGUOUS_HOLD_S, body.listing_id))
+        raise HTTPException(502, "escrow unreachable/ambiguous: "
+                                 + (r.text if r is not None else err))
     sale = r.json()
     with tx() as conn:
         conn.execute(
@@ -429,9 +503,8 @@ def execute_sale(body: ExecuteSaleIn, x_escrow_secret: str = Header(default=""))
                ON CONFLICT(payment_hash) DO UPDATE SET status='done'""",
             (body.idempotency_key, body.item_id, body.buyer_id, body.seller_id,
              listing["id"]))
-        conn.execute(
-            "UPDATE purchases SET status='completed' WHERE payment_hash=?",
-            (body.idempotency_key,))
+        # the purchase completes on the escrow's "completed" webhook, not
+        # here: the seller payout can still fail and roll this back
     return {"status": "done"}
 
 
@@ -481,6 +554,8 @@ def sale_result(body: SaleResultIn, x_escrow_secret: str = Header(default="")):
             conn.execute(
                 "UPDATE purchases SET status='completed' WHERE payment_hash=?",
                 (body.payment_hash,))
+            conn.execute(
+                "UPDATE sales SET final=1 WHERE payment_hash=?", (body.payment_hash,))
     elif body.result == "cancelled":
         with tx() as conn:
             conn.execute(

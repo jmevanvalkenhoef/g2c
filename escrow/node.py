@@ -6,7 +6,9 @@ Implementations:
 
 Unified state vocabularies:
   hold invoice state: "open" | "accepted" | "settled" | "cancelled" | None(unknown)
-  payment state:      "pending" | "complete" | "failed" | None(unknown)
+  payment state:      "pending" | "complete" | "failed" | None(never initiated)
+                      — raises NodeError when the node can't be asked: an
+                      unreachable node must never read as "not paid"
 """
 import os
 from typing import Optional, Protocol
@@ -21,18 +23,20 @@ class NodeError(RuntimeError):
 class NodeClient(Protocol):
     def get_info(self) -> dict: ...
     def create_hold_invoice(self, payment_hash_hex: str, amount_msat: int,
-                            expiry_s: int = 3600) -> str: ...
+                            expiry_s: int = 3600,
+                            cltv_expiry: Optional[int] = None) -> str: ...
     def settle_hold_invoice(self, preimage_hex: str) -> None: ...
     def cancel_hold_invoice(self, payment_hash_hex: str) -> None: ...
     def hold_invoice_state(self, payment_hash_hex: str) -> Optional[str]: ...
-    def pay_invoice(self, bolt11: str, timeout_s: int) -> tuple[bool, str]: ...
+    def hold_blocks_left(self, payment_hash_hex: str) -> Optional[int]: ...
+    def pay_invoice(self, bolt11: str, timeout_s: int,
+                    fee_limit_msat: int = 1_000_000,
+                    cltv_limit: Optional[int] = None) -> tuple[bool, str]: ...
     def payment_state(self, payment_hash_hex: str) -> Optional[str]: ...
     def decode_invoice(self, bolt11: str) -> dict: ...
     # lab profile (deterministic seller invoices)
     def create_invoice(self, amount_msat: int, label: str, desc: str) -> tuple[str, str]: ...
-    def connect_peer(self, node_id: str, host: str) -> None:
-        self.node.call("connect", [f"{node_id}@{host}"])
-
+    def connect_peer(self, node_id: str, host: str) -> None: ...
     def find_invoice_by_label(self, label: str) -> Optional[dict]: ...
 
 
@@ -51,9 +55,10 @@ class CLNNode:
         return self.node.call("getinfo")
 
     def create_hold_invoice(self, payment_hash_hex: str, amount_msat: int,
-                            expiry_s: int = 3600) -> str:
+                            expiry_s: int = 3600,
+                            cltv_expiry: Optional[int] = None) -> str:
         # hash-only creation: the node never sees the preimage
-        # (expiry_s ignored: the CLN plugin takes none)
+        # (expiry_s/cltv_expiry ignored: the lab's plugin build takes neither)
         inv = self.node.call("holdinvoice", [payment_hash_hex, amount_msat])
         return inv["bolt11"]
 
@@ -73,9 +78,20 @@ class CLNNode:
             return None
         return _CLN_STATE.get(invs[0].get("state"))
 
-    def pay_invoice(self, bolt11: str, timeout_s: int) -> tuple[bool, str]:
+    def hold_blocks_left(self, payment_hash_hex: str) -> Optional[int]:
+        # not exposed by the lab's plugin build: unknown, callers proceed
+        # without a CLTV cap (regtest only; mainnet runs LND)
+        return None
+
+    def pay_invoice(self, bolt11: str, timeout_s: int,
+                    fee_limit_msat: int = 1_000_000,
+                    cltv_limit: Optional[int] = None) -> tuple[bool, str]:
+        params = {"bolt11": bolt11, "retry_for": timeout_s,
+                  "maxfee": int(fee_limit_msat)}
+        if cltv_limit:
+            params["maxdelay"] = int(cltv_limit)
         try:
-            res = self.node.call("pay", {"bolt11": bolt11, "retry_for": timeout_s})
+            res = self.node.call("pay", params)
             status = res.get("status", "pending")
         except cln.CLNError as e:
             return False, str(e)
@@ -84,10 +100,17 @@ class CLNNode:
     def payment_state(self, payment_hash_hex: str) -> Optional[str]:
         try:
             res = self.node.call("listpays", {"payment_hash": payment_hash_hex})
-            pays = res.get("pays", [])
-        except cln.CLNError:
+        except (cln.CLNError, OSError) as e:
+            raise NodeError(f"listpays: {e}") from e
+        statuses = [p["status"] for p in res.get("pays", [])]
+        if not statuses:
             return None
-        return pays[-1]["status"] if pays else None
+        # several attempts can exist for one hash: any success wins, any
+        # in-flight attempt means we must wait
+        for st in ("complete", "pending"):
+            if st in statuses:
+                return st
+        return "failed"
 
     def decode_invoice(self, bolt11: str) -> dict:
         d = self.node.call("decodepay", [bolt11])
@@ -127,6 +150,6 @@ def make_node(kind: Optional[str] = None, **kwargs) -> NodeClient:
             kwargs.get("network", os.environ.get("CLN_NETWORK", "regtest"))))
     if kind == "lnd":
         from lnd import LNDNode
-        allowed = {"rest_url", "cert_path", "macaroon_path"}
+        allowed = {"rest_url", "cert_path", "macaroon_path", "require_macaroon"}
         return LNDNode(**{k: v for k, v in kwargs.items() if k in allowed})
     raise NodeError(f"unknown NODE_BACKEND: {kind!r}")

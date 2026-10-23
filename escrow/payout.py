@@ -43,9 +43,16 @@ def resolve_lnurl(address: str, amount_msat: int,
             raise PayoutError("lnurlp endpoint missing callback")
         if not (lo <= amount_msat <= hi):
             raise PayoutError(f"amount {amount_msat} outside [{lo},{hi}]")
+        if pay.get("status") == "ERROR":
+            raise PayoutError(f"lnurlp error: {pay.get('reason')}")
+        if not str(callback).startswith("https://"):
+            raise PayoutError("lnurlp callback is not https")
         r = c.get(callback, params={"amount": amount_msat})
         r.raise_for_status()
-        pr = r.json().get("pr")
+        cb = r.json()
+        if cb.get("status") == "ERROR":
+            raise PayoutError(f"lnurl callback error: {cb.get('reason')}")
+        pr = cb.get("pr")
         if not pr:
             raise PayoutError("callback returned no invoice")
         return pr, ""
@@ -63,8 +70,12 @@ def verify_invoice(node, bolt11: str, expect_msat: int) -> str:
     except Exception as e:
         raise PayoutError(f"decode failed: {e}") from e
     got = d.get("amount_msat")
-    if got is not None and got != expect_msat:
+    if got is None:
+        raise PayoutError("amountless payout invoice refused")
+    if got != expect_msat:
         raise PayoutError(f"invoice amount {got} != expected {expect_msat}")
+    if not d.get("payment_hash"):
+        raise PayoutError("payout invoice has no payment hash")
     return d["payment_hash"]
 
 
@@ -87,12 +98,15 @@ class PayoutResolver:
         if ptype == "nwc":
             import nwc
             try:
-                bolt11, pay_hash = nwc.request_invoice(
+                bolt11, _ = nwc.request_invoice(
                     payout["target"], sale["seller_amount_msat"],
                     "g2c sale payout")
             except nwc.NWCError as e:
                 raise PayoutError(f"nwc: {e}") from e
-            verify_invoice(self.escrow_node, bolt11, sale["seller_amount_msat"])
+            # track the hash decoded from the invoice itself, never the one
+            # the wallet claims: crash recovery looks the payout up by it
+            pay_hash = verify_invoice(self.escrow_node, bolt11,
+                                      sale["seller_amount_msat"])
             return bolt11, pay_hash
         raise PayoutError(f"unknown payout type: {ptype!r}")
 

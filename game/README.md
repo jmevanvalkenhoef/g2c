@@ -30,6 +30,12 @@ cd game/escrow-stub && uv run uvicorn app:app --port 8001
 # open http://localhost:8000 in two browser windows (two player names)
 ```
 
+Login is name + password: the first login to a name (the seeded Alice and Bob
+included) sets its password, later logins must match. Sessions are random
+tokens (`X-Player-Session` header per tab, `session` cookie otherwise).
+An item received in a sale stays locked (not re-listable) until the escrow
+reports the sale `completed`, because until then it can still be rolled back.
+
 Env (defaults in parens) on the game: `ESCROW_URL` (localhost:8001),
 `ESCROW_SHARED_SECRET` (dev-secret). On the stub: `GAME_URL`
 (localhost:8000), `ESCROW_SHARED_SECRET`, `SALE_FAIL_EVERY=n` (every n-th sale

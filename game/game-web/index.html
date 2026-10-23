@@ -66,9 +66,9 @@ window.addEventListener('unhandledrejection', ev =>
   showErr('Async error: ' + errText(ev.reason)));
 
 async function api(path, opts = {}) {
-  const pid = sessionStorage.getItem('g2c_player');
+  const sess = sessionStorage.getItem('g2c_session');
   const headers = {'Content-Type':'application/json'};
-  if (pid) headers['X-Player-Id'] = pid;
+  if (sess) headers['X-Player-Session'] = sess;
   const r = await fetch(path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
   if (r.status === 401) { me = null; render(); throw new Error('unauth'); }
   const body = await r.json().catch(() => ({}));
@@ -148,17 +148,19 @@ async function viewInv() {
 }
 
 function switchPlayer() {
-  sessionStorage.removeItem('g2c_player');
+  sessionStorage.removeItem('g2c_session');
   me = null; pendingQR = null; render();
 }
 
 async function loginAs(name) {
+  const password = prompt(`Password for ${name} (the first login sets it, 4+ characters)`);
+  if (password === null) return;
   try {
-    me = await api('/v1/players', {method:'POST', body: JSON.stringify({name})});
-    sessionStorage.setItem('g2c_player', me.id);  // per-TAB session
+    me = await api('/v1/players', {method:'POST', body: JSON.stringify({name, password})});
+    sessionStorage.setItem('g2c_session', me.session);  // per-TAB session
     render();
   } catch (e) {
-    showErr('Login failed: ' + e.message + ' — is the game backend running on port 8000?');
+    showErr('Login failed: ' + (e.message === 'unauth' ? 'wrong password' : e.message));
   }
 }
 
@@ -256,12 +258,12 @@ async function watchPurchase(silent) {
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => { tab = b.dataset.tab; pendingQR = null; render(); });
 // restore session for THIS tab (sessionStorage), else browser cookie
 (async () => {
-  const pid = sessionStorage.getItem('g2c_player');
+  const sess = sessionStorage.getItem('g2c_session');
   try {
     me = await api('/v1/players/me');
     render();
   } catch (e) {
-    if (pid) sessionStorage.removeItem('g2c_player');
+    if (sess) sessionStorage.removeItem('g2c_session');
     render();
   }
 })();

@@ -17,6 +17,7 @@ import time
 sys.path.insert(0, ".")
 import websockets
 import bip340
+import nip04
 import nip44
 import nwc
 
@@ -31,7 +32,11 @@ received_requests = []
 
 def wallet_handle(ev: dict) -> dict:
     """the 'Zeus' side: decrypt the request, return a signed response event"""
-    payload = json.loads(nip44.decrypt(nip44.b64_decode(ev["content"]), ck))
+    if nip04.is_nip04(ev["content"]):        # what nwc.py sends (Zeus dialect)
+        k04 = nip04.conversation_key(wallet_secret, bytes.fromhex(client_pub))
+        payload = json.loads(nip04.decrypt(ev["content"], k04))
+    else:
+        payload = json.loads(nip44.decrypt(nip44.b64_decode(ev["content"]), ck))
     received_requests.append(payload)
     assert payload["method"] == "make_invoice", payload
     amount = payload["params"]["amount_msat"]
@@ -71,7 +76,8 @@ async def relay_handler(ws):
 
 def run_relay(port, ready):
     async def main():
-        async with websockets.serve(relay_handler, "127.0.0.1", port):
+        async with websockets.serve(relay_handler, "127.0.0.1", port,
+                                    subprotocols=["nostr"]):  # like real relays
             ready.set()
             await asyncio.Future()
     asyncio.run(main())

@@ -64,6 +64,17 @@ def buyer_pay_status(ph):
         return "?"
 
 
+SESSIONS: dict[int, str] = {}
+
+
+def login_players():
+    """game logins are password sessions; the drill claims both players"""
+    for pid, name in ((ALICE, "alice"), (BOB, "bob")):
+        _, me = req(f"{GAME}/v1/players", "POST",
+                    {"name": name, "password": "drill-pass"})
+        SESSIONS[pid] = me["session"]
+
+
 def item_owner(item_id):
     _, items = req(f"{GAME}/v1/items")
     return [i for i in items if i["id"] == item_id][0]["owner_name"]
@@ -73,11 +84,11 @@ def run_drill(target_state, item_id):
     print(f"\n=== kill at {target_state} (item {item_id}) ===")
     req(f"{GAME}/v1/listings", "POST",
         {"item_id": item_id, "price_msat": 20000000},
-        {"X-Player-Id": ALICE})
+        {"X-Player-Session": SESSIONS[ALICE]})
     _, listings = req(f"{GAME}/v1/market")
     lid = [l for l in listings if l["item_id"] == item_id][0]["id"]
     _, sale = req(f"{GAME}/v1/purchases", "POST", {"listing_id": lid},
-                  {"X-Player-Id": BOB})
+                  {"X-Player-Session": SESSIONS[BOB]})
     sid, ph = sale["sale_id"], sale["payment_hash"]
 
     killed = threading.Event()
@@ -100,7 +111,7 @@ def run_drill(target_state, item_id):
     t = threading.Thread(target=watcher)
     t.start()
     req(f"{GAME}/v1/purchases/{ph}/simulate-pay", "POST", {},
-        {"X-Player-Id": BOB}, timeout=20)
+        {"X-Player-Session": SESSIONS[BOB]}, timeout=20)
 
     # wait for terminal state (restart downtime ~15s, payouts, retries)
     deadline = time.time() + 240
@@ -115,7 +126,7 @@ def run_drill(target_state, item_id):
     if final is None:
         return False, f"stuck non-terminal (last={state})"
 
-    _, purchase = req(f"{GAME}/v1/purchases/{ph}", headers={"X-Player-Id": BOB})
+    _, purchase = req(f"{GAME}/v1/purchases/{ph}", headers={"X-Player-Session": SESSIONS[BOB]})
     pstat = purchase.get("status")
     owner = item_owner(item_id)
     # buyer node bookkeeping lags the HTLC settle by a moment — poll for it
@@ -166,6 +177,7 @@ def main():
         time.sleep(1)
     if not booted:
         sys.exit("game failed to boot on :8000 (see /tmp/g2c_game.log)")
+    login_players()
 
     targets = ["HTLC_HELD", "EXECUTING", "PAYING_SELLER", "SETTLING"]
     alice_items = [i["id"] for i in req(f"{GAME}/v1/items")[1]

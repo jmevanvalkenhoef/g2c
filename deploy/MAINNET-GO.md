@@ -1,7 +1,9 @@
 # Mainnet go-checklist — everything up to and including first funding
 
 Node: `g2c-escrow` · `<node-pubkey>`
-Status: synced, systemd-managed (lnd + lnd-unlock + g2c-escrow + g2c-game, all
+Status (2026-10-23): funded, channel open, first real mainnet sale completed
+end to end. Sections 1-5 below are the record of how it got there.
+Previously: synced, systemd-managed (lnd + lnd-unlock + g2c-escrow + g2c-game, all
 `restart=always`, enabled at boot). Escrow and game run the LND-ported code
 that passed the full drill battery on regtest.
 
@@ -69,3 +71,46 @@ Either:
 - If the channel pair side drifts (many sales), rebalance or open a second
   channel — do not let outbound hit zero mid-sale (the payout would fail,
   the sale rolls back and refunds; ugly but safe).
+
+## 6. Upgrading to the money-safety release
+
+This release closes the paths where a sale could pay the seller AND refund
+the buyer (in-flight payouts treated as failed, payouts after the buyer HTLC
+was gone, settle errors read as success, payout lookups capped at 500).
+
+1. **Drain first.** No sale may be mid-flight during the upgrade:
+   `curl -s localhost:8100/v1/metrics` must show only COMPLETED / CANCELLED
+   (or ERROR) in `states`. Pause listings in the game if needed.
+2. `git pull` on the VPS.
+3. Add to `/etc/g2c/escrow.env` (see `systemd/escrow.env.example`):
+   `FEE_PPM=<your pricing>`, `HOLD_CLTV_EXPIRY=288`, `HOLD_SAFETY_BLOCKS=24`,
+   `MIN_PAYOUT_CLTV=60`. The seller payout's routing fee is now capped at the
+   sale's fee: with a flat 1-sat fee most payouts would fail and refund, so
+   set `FEE_PPM` (or `MAX_ROUTING_FEE_MSAT`) deliberately.
+4. The escrow now **refuses to start** with an empty or `dev-secret`
+   `ESCROW_SHARED_SECRET`, or when `LND_TLS_CERT` / `LND_MACAROON` point at a
+   missing file. That's intended.
+5. `systemctl restart g2c-escrow g2c-game`, then `curl localhost:8100/v1/health`.
+6. Game logins now take a password: the first login to Alice/Bob sets it.
+7. One small sale end to end, then watch `journalctl -u g2c-escrow -f`.
+
+`/v1/metrics` now lists `errors_needing_attention`. Anything there with a
+`LOSS:` reason means the seller was paid but the buyer's HTLC got cancelled:
+reconcile by hand. It should never appear; alert on it if you add monitoring.
+
+## 7. Hardening (do soon, none of it changes behaviour)
+
+- **Channel backup off the box**, after every channel open:
+  `scp root@g2c:/root/.lnd/data/chain/bitcoin/mainnet/channel.backup ~/.g2c-backup-channel.backup`.
+  The seed alone does not recover channel funds.
+- **Least-privilege macaroon** for the escrow instead of `admin.macaroon`:
+  ```bash
+  lncli bakemacaroon info:read invoices:read invoices:write \
+      offchain:read offchain:write --save_to /root/.lnd/escrow.macaroon
+  ```
+  then point `LND_MACAROON` at it. A leaked escrow key can then no longer
+  move on-chain funds or close channels.
+- **Non-root services**: run escrow and game as a dedicated `g2c` user
+  (`User=g2c` in the units, data dirs owned by it, macaroon readable by it).
+- The wallet password sits in `/root/.lnd-wallet-pass` for unattended unlock:
+  keep it root-only, and accept that root on the VPS = the hot wallet.

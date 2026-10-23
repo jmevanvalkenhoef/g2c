@@ -35,6 +35,7 @@ services:
       GAME_URL: http://game-backend:8000
       ESCROW_SHARED_SECRET: ${ESCROW_SHARED_SECRET}
       FEE_MSAT: "1000"
+      FEE_PPM: ${FEE_PPM:-10000}   # placeholder pricing: base + 1 %
       DEMO_BRIDGE: "0"          # no lab buyer node: phones' wallets pay the QR
       CLN_NETWORK: ${NETWORK:-testnet}
       ESCROW_NODE_DIR: /cln
