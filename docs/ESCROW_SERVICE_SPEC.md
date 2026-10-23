@@ -67,10 +67,11 @@ except recoverable windows documented in §7.
 | Local transactional state | SQLite WAL | single writer, `payment_hash` as PK |
 
 **Hold window budget**: from HTLC lock to settle must stay well inside the final-hop
-CLTV delta. Target: **≤ 10 s** p99 (game API call + invoice fetch + payment attempt).
+CLTV delta. Target: **≤ 10 s** p99 (reserve call + invoice fetch + payment attempt).
 Hard alarm at 30 s. Never perform human-in-the-loop actions while holding.
 
-**Invoice expiry**: hold invoice `expiry = 600 s`. Reaper (§8) releases reservations.
+**Invoice expiry**: hold invoice `expiry = 600 s` (unpaid); a paid HTLC carries
+`HOLD_CLTV_EXPIRY` (288) blocks of budget. Reaper (§8) cancels unpaid invoices.
 
 **Units**: msat internally everywhere; convert only at edges.
 
@@ -117,25 +118,39 @@ their own deadline before being treated as row #5 failures.
 
 ### 3.2 Game API (they serve; called by us; contract to hand to the third party)
 
-Auth: HMAC as above. All mutations keyed by `idempotency_key = payment_hash`
-(hex). **Contractual requirements:** mutations must be atomic server-side (single SQL
-transaction: item transfer + any internal accounting) and replay-safe.
+Auth: shared secret (`X-Escrow-Secret`). All calls keyed by
+`idempotency_key = payment_hash` (hex). **Contractual requirements:** each call is
+atomic server-side (one SQL transaction) and replay-safe, and a **reserved item is
+frozen**: no trade, listing, drop, craft, consume, mail, delete or admin action may
+touch it until it is committed or released.
 
 ```
-POST /execute_sale
+POST /reserve_sale      # freeze the item at the seller for this sale
   { "item_id": "...", "buyer_id": "...", "seller_id": "...",
     "idempotency_key": "<payment_hash>" }
-→ 200 { "status": "done" }        # or "already_done" — both mean confirmed
-→ 409 { "status": "rejected", "reason": "item_unavailable" }   # definitive
-→ 5xx / timeout                   # AMBIGUOUS → must retry / reconcile via status
+→ 200 { "status": "reserved" | "already_reserved" | "already_committed" }
+→ 409 { "status": "rejected", "reason": "item_unavailable" | "sale_released" }
+→ 5xx / timeout          # AMBIGUOUS → we retry (idempotent)
+
+POST /commit_sale       # hand the frozen item to the buyer (money is final)
+  { "idempotency_key": "<payment_hash>" }
+→ 200 { "status": "committed" | "already_committed" }
+→ 409 { "status": "rejected", ... }   # unknown/released key: MUST NOT happen
+                                      # for a reserved sale (we escalate)
+
+POST /release_sale      # unfreeze; the item never left the seller
+  { "idempotency_key": "<payment_hash>", "reason": "..." }
+→ 200 { "status": "released" | "already_released" | "not_found_ignored" }
+       # not_found: record a tombstone so a late reserve with this key fails
+→ 409 { "status": "rejected", "reason": "sale_committed" }
 
 GET /sale_status?key=<payment_hash>
-→ 200 { "status": "done" | "not_found" }
-
-POST /rollback_sale
-  { "idempotency_key": "<payment_hash>", "reason": "seller_payment_failed" }
-→ 200 { "status": "rolled_back" } | 409 { "status": "already_rolled_back" }
+→ 200 { "status": "reserved" | "committed" | "released" | "not_found" }
 ```
+
+A reservation never expires on the game side by itself: only the escrow releases
+it (an auto-expiring reservation could unfreeze an item we are about to commit).
+For reconciliation the game asks `GET /v1/sales/{id}` on our side.
 
 ### 3.3 Node backend integration — Greenlight ruled out (2026-02-14)
 
@@ -166,101 +181,108 @@ Common requirements regardless of option:
 ## 4. Sale state machine
 
 ```
-CREATED ──▶ AWAITING_PAYMENT ──▶ HTLC_HELD ──▶ EXECUTING ──▶ PAYING_SELLER ──▶ SETTLING ──▶ COMPLETED
-   │              │                  │             │              │                │
-   │              │ (expiry)         │ (transfer   │ (pay fails)  │ (settle fails) │
-   │              ▼                  │  rejected)  ▼              ▼ (retry)       ▼
-   └────────▶ CANCELLED ◀────────────┘        ROLLING_BACK ──▶ CANCELLING   (terminal)
-                     ▲                        (rollback_sale
-                     └────────────────────────+ cancel invoice)
+AWAITING_PAYMENT ─▶ HTLC_HELD ─▶ RESERVING ─▶ PAYING_SELLER ─▶ SETTLING ─▶ COMMITTING ─▶ COMPLETED
+       │                            │              │                │            │
+       │ (expired unpaid)           │ (rejected /  │ (payout        │ (buyer     │ (commit
+       │                            │  HTLC late)  │  FAILED x N)   │  HTLC lost)│  rejected)
+       ▼                            ▼              ▼                ▼            ▼
+   CANCELLING ◀──────────────── RELEASING ◀────────┘              ERROR        ERROR
+       │                    (release_sale, then cancel)          (LOSS)    (PAID, UNDELIVERED)
+       ▼
+   CANCELLED
 ```
 
-State semantics (persisted in SQLite, one row per sale, transitions single-threaded per
-sale via `UPDATE ... WHERE state = ?` optimistic lock):
+State semantics (persisted in SQLite, one row per sale, one driver task per sale):
 
-| State | Meaning | Money moved? |
-|---|---|---|
-| CREATED | sale accepted, preimage generated, invoice not yet issued | no |
-| AWAITING_PAYMENT | hold invoice live, payment request returned to game | no |
-| HTLC_HELD | buyer's HTLC locked at node (fully funded incl. MPP parts) | no (in-flight) |
-| EXECUTING | calling `execute_sale` (retries allowed) | no |
-| PAYING_SELLER | resolving LN address → invoice → `pay` (retries w/ fresh invoices) | no (until success) |
-| SETTLING | releasing preimage to settle hold invoice | — |
-| ROLLING_BACK | transfer confirmed done but seller payment definitively failed; calling `rollback_sale` then cancel | no |
-| CANCELLING / CANCELLED | cancel invoice; buyer auto-refunded by protocol | no |
-| COMPLETED | transfer done, seller paid, hold invoice settled | yes (all) |
+| State | Meaning | Money moved? | Item |
+|---|---|---|---|
+| AWAITING_PAYMENT | hold invoice live, payment request returned to game | no | listed |
+| HTLC_HELD | buyer's HTLC locked at node | no (held) | listed |
+| RESERVING | calling `reserve_sale` (retries); refuses if the HTLC is gone/late | no | → frozen |
+| PAYING_SELLER | resolve payout invoice once, pay it; wait while in flight | seller leg | frozen |
+| SETTLING | release preimage; buyer's payment completes | yes (all) | frozen |
+| COMMITTING | calling `commit_sale`, retried for as long as the game needs | — | → buyer |
+| RELEASING | payout definitively failed / never started; `release_sale`, then cancel | no | → unfrozen |
+| CANCELLING / CANCELLED | cancel invoice; buyer auto-refunded by protocol | no | seller |
+| COMPLETED | seller paid, hold invoice settled, item committed | yes | buyer |
+| ERROR | needs a human; `failure_reason` says why (`LOSS:`, `PAID, UNDELIVERED`) | — | frozen |
 
-Invariant: **preimage released ⇔ (`execute_sale` confirmed done AND seller payment
-confirmed succeeded)**. Enforced by the state machine; no other code path may settle.
+Invariants:
+- **Nothing is undone.** The item moves exactly once (commit), after the money is final.
+- **Preimage released ⇔ item reserved AND seller payment confirmed succeeded.**
+- **Release/refund only once the seller payment is FAILED or never initiated**
+  (in flight ≠ failed); and only after the game confirmed the release.
+- **No payout unless the buyer HTLC is still ACCEPTED with `MIN_PAYOUT_CLTV` usable
+  blocks; the payout route's timelock is capped below the buyer HTLC's expiry.**
+- Commit comes after settle on purpose: commit is a promise on a frozen item, so a
+  game outage there only delays delivery; it never puts money at risk.
 
 ---
 
 ## 5. Purchase flow (happy path)
 
 ```
-Game          Escrow                    CLN/Greenlight      Seller wallet
+Game          Escrow                    LND node            Seller wallet
  │ create_sale │                            │                    │
  │────────────▶│ gen preimage+hash          │                    │
- │             │── holdinvoice(hash,X) ────▶│                    │
+ │             │── hold invoice(hash,X) ───▶│                    │
  │◀─ pay_req ──│                            │                    │
  │ (show to buyer)                          │                    │
- │             │◀─ HTLC locked (event) ─────│                    │
- │             │ state=EXECUTING            │                    │
- │ execute_sale│                            │                    │
- │────────────▶│ (retry until 200/409)      │                    │
- │◀─ done ─────│                            │                    │
+ │             │◀─ HTLC accepted ───────────│                    │
+ │ reserve_sale│ state=RESERVING            │                    │
+ │◀────────────│ (retry until 200/409)      │                    │
+ │── reserved ▶│ item frozen at seller      │                    │
  │             │ state=PAYING_SELLER        │                    │
  │             │ resolve LN addr → invoice  │                    │
- │             │── pay(X-fee) ─────────────▶│───────────────────▶│
- │             │◀─ pay success (preimage') ─│                    │
+ │             │── pay(X-fee, cltv cap) ───▶│───────────────────▶│
+ │             │◀─ pay success ─────────────│                    │
  │             │ state=SETTLING             │                    │
  │             │── settle(preimage) ───────▶│ buyer's pay completes
- │             │ state=COMPLETED            │                    │
+ │ commit_sale │ state=COMMITTING           │                    │
+ │◀────────────│ (retry until 200)          │                    │
+ │─ committed ▶│ state=COMPLETED            │                    │
 ```
 
 ## 6. Failure matrix
 
 | # | Failure | Detection | Action | End state | Sats risk |
 |---|---|---|---|---|---|
-| 1 | Buyer never pays | invoice expiry / reaper | release item reservation | CANCELLED | none |
+| 1 | Buyer never pays | invoice expiry / reaper | cancel invoice | CANCELLED | none |
 | 2 | Buyer pays partially (MPP incomplete) | invoice not fully funded | wait; expiry cancels | CANCELLED | none |
-| 3 | `execute_sale` definitive 409 | response | cancel invoice | CANCELLED | none |
-| 4 | `execute_sale` timeout/5xx | response/timeout | retry; then `sale_status`; only 200/409 proceeds | EXECUTING → … | none |
-| 5 | Seller payout resolution fails (LNURL: HTTP error, unambiguous. NWC: relay timeout, ambiguous — adapter deadline applies) | resolver result | retry with backoff (LNURL: same endpoint; NWC: re-request); give up → rollback + cancel | ROLLING_BACK → CANCELLED | none |
-| 6 | Seller payment routing fails | `pay` failed status | re-resolve fresh invoice (PayoutResolver), retry N; then rollback + cancel | ROLLING_BACK → CANCELLED | none |
-| 7 | Seller payment succeeded, settle fails | local error | retry settle forever (we hold preimage; HTLC is ours) | SETTLING → COMPLETED | none (worst case: HTLC timeout refunds buyer while seller paid → **fee+principal loss; alert + manual reconcile**) |
-| 8 | Crash anywhere | restart | §8 reconciliation | — | none beyond #7 window |
-| 9 | Item re-listed/raced (reserved but seller changed mind) | `execute_sale` 409 | cancel | CANCELLED | none |
-
-Notes:
-- #7 is the only principal-risk window and it is local-operation-sized (seconds), plus
-  requires simultaneous failure. Alert immediately on any sale sitting in SETTLING > 5 s.
-- After seller payment succeeds, **never** roll back; only settle (else we'd have paid
-  the seller without collecting from the buyer).
+| 3 | `reserve_sale` definitive 409 | response | release (no-op) + cancel | CANCELLED | none |
+| 4 | `reserve_sale` timeout/5xx | response/timeout | retry; if the buyer HTLC gets late → release + cancel | RESERVING → … | none |
+| 5 | Seller payout resolution fails (LNURL: HTTP error. NWC: relay timeout) | resolver result | retry N; then release + cancel | RELEASING → CANCELLED | none |
+| 6 | Seller payment routing fails | node reports FAILED | retry same invoice N; then release + cancel | RELEASING → CANCELLED | none |
+| 6b | Seller payment stuck in flight | node reports IN_FLIGHT | **wait**; never release while in flight | PAYING_SELLER → … | none (route timelock capped below buyer HTLC) |
+| 7 | Seller paid, settle fails | node error + invoice lookup | retry; if the invoice is CANCELED → ERROR `LOSS:` | SETTLING → COMMITTING / ERROR | **principal loss only if the buyer HTLC was lost; alert + manual reconcile** |
+| 8 | `commit_sale` timeout/5xx | response/timeout | retry forever (money is final, item frozen) | COMMITTING → COMPLETED | none |
+| 9 | `commit_sale` 409 (game lost the reservation) | response | ERROR `PAID, UNDELIVERED` | ERROR | none for us; buyer needs delivery or refund by hand |
+| 10 | `release_sale` 409 (game says committed) | response | ERROR, no refund | ERROR | manual |
+| 11 | Crash anywhere | restart | §8 reconciliation | — | none beyond #7 |
 
 ---
 
 ## 7. Trust & atomicity statement (for the third party)
 
-The only cross-system commit points are (a) `execute_sale` confirmation and (b) seller
-payment success. Both precede preimage release. The game API's idempotency on
-`payment_hash` is what makes retries safe; without it the design is void.
+The cross-system commit points, in order: (a) `reserve_sale` confirmation (item
+frozen), (b) seller payment success, (c) preimage release (buyer's payment final),
+(d) `commit_sale`. The item changes owner only at (d), after the money is final, so
+the game never has to undo a transfer. The game's idempotency on `payment_hash` and
+its enforcement of the freeze are what make the design hold; without them it is void.
 
 ---
 
 ## 8. Crash recovery & reconciliation
 
-On startup and every 30 s:
+Every loop tick (0.5 s):
 
-1. Load all sales in non-terminal states.
-2. Query CLN: `listinvoices` (our hold invoice state), `listpays` (seller payment
-   status).
-3. Query game: `sale_status` for sales past EXECUTING.
-4. Drive the state machine forward per §4 invariants; all actions idempotent
-   (`payment_hash` keys everywhere).
-5. Never guess ambiguous outcomes: if `sale_status` = not_found and no definitive 409
-   was recorded, keep retrying `execute_sale` (do not cancel; buyer is still holding
-   the HTLC which times out safely on its own).
+1. Load all sales in non-terminal states; drive each in its own task.
+2. Ask the node: hold invoice state + blocks left, seller payment state by hash
+   (TrackPaymentV2). An unreachable node means "decide nothing", never "not paid".
+3. Drive the state machine forward per §4 invariants; all game calls are idempotent
+   (`payment_hash` keys everywhere), so a crash between any two steps just repeats
+   the last call.
+4. Retry pending game webhooks (terminal states) with backoff.
 
 Reaper: sales in AWAITING_PAYMENT past `expires_at + 60 s` → cancel invoice, CANCELLED.
 
@@ -309,10 +331,11 @@ CREATE TABLE state_log (       -- append-only audit trail
 
 Metrics (Prometheus): sales by state, hold-window duration histogram, game API
 latency/error rate, seller payment failure rate, count in SETTLING (must be ~0),
-count in ROLLING_BACK, fee earned (msat).
+count in RELEASING / COMMITTING, count in ERROR (must be 0), fee earned (msat).
 
-Alerts: any sale in SETTLING > 5 s; any sale in HTLC_HELD > 30 s; ROLLING_BACK
-non-empty for > 60 s; Greenlight unreachable; reconciliation loop failing.
+Alerts: any sale in ERROR; any sale in SETTLING > 5 s; any sale in HTLC_HELD or
+RESERVING > 30 s; COMMITTING > 60 s (game down, item frozen, buyer waiting);
+node unreachable; reconciliation loop failing.
 
 ## 12. Milestones
 

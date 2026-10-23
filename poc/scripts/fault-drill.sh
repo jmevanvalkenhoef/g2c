@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fault drill: the REAL escrow against the fault-injecting mock game.
 # Proves spec §6 rows 3-4 against real HTLCs:
-#   reject   -> execute_sale 409 -> cancel -> buyer auto-refunded
+#   reject   -> reserve_sale 409 -> release + cancel -> buyer auto-refunded
 #   timeout  -> ambiguous -> keep retrying (hold the HTLC, settle nothing)
 #   recovery -> game comes back -> sale completes
 #
@@ -63,13 +63,13 @@ check "reject -> CANCELLED" "CANCELLED" "$S"
 for i in $(seq 30); do [ "$(pay_status $PH)" = "failed" ] && break; sleep 1; done
 check "reject -> buyer refunded" "failed" "$(pay_status $PH)"
 
-echo "== FAULT_MODE=timeout (ambiguous execute_sale) =="
+echo "== FAULT_MODE=timeout (ambiguous reserve_sale) =="
 set_fault timeout
 read SID2 PH2 <<< $(new_sale)
 tap $SID2
 echo "  waiting 40s of ambiguity…"
 sleep 40
-check "timeout -> still retrying (not settled, not cancelled)" "EXECUTING" "$(state_of $SID2)"
+check "timeout -> still retrying (not settled, not cancelled)" "RESERVING" "$(state_of $SID2)"
 check "timeout -> buyer still pending (HTLC held)" "pending" "$(pay_status $PH2)"
 
 echo "== game recovers (FAULT_MODE=off) — held sale must complete =="

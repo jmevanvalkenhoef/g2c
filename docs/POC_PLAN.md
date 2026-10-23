@@ -41,6 +41,7 @@ game/                    # NEW in v0.2
   game-backend/          # FastAPI + SQLite: users, inventory, listings, purchases
                          #   - supersedes mock-game; KEEPS execute_sale/sale_status/
                          #     rollback_sale contract (idempotent on payment_hash)
+                         #   (since replaced by reserve/commit/release, spec §3.2)
                          #   - calls escrow POST /v1/sales on buy; polls sale status
   game-web/              # PWA: inventory, list item (invoice attach), market view,
                          #   buy → show BOLT11 QR; single-page, no build toolchain

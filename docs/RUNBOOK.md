@@ -51,7 +51,7 @@ cd poc && watch -n1 '
 | **Sell** (set price) | `POST /v1/listings` → row in game DB | pane 2 |
 | **Buy** | listing → `in_flight`; escrow generates preimage, node gets hash only; `holdinvoice` → real `lnbcrt…` QR | pane 3: new invoice `unpaid` |
 | **Tap QR** | game → escrow `/pay` → cln-buyer pays the invoice → **real HTLC locks** | pane 3: invoice `accepted`, buyer payment `pending` — *that pending is the escrow holding your money* |
-| (automatic, ~5–20s) | `HTLC_HELD → EXECUTING` (item transfer in one SQL tx) `→ PAYING_SELLER` (invoice at cln-seller, paid from escrow's channel) `→ SETTLING` (preimage released) `→ COMPLETED` + webhook | pane 1 prints each transition; pane 3: buyer `complete`, outbound channel drops by net amount |
+| (automatic, ~5–20s) | `HTLC_HELD → RESERVING` (item frozen at the seller) `→ PAYING_SELLER` (invoice at cln-seller, paid from escrow's channel) `→ SETTLING` (preimage released) `→ COMMITTING` (item to buyer) `→ COMPLETED` + webhook | pane 1 prints each transition; pane 3: buyer `complete`, outbound channel drops by net amount |
 | **✅ paid** | PWA poll flips the pill; item moves to buyer | both windows |
 
 Typical total: tap → ✅ in 15–25s. Nearly all of it is CLN `pay` latency on the
@@ -71,14 +71,16 @@ poc/scripts/fault-drill.sh     # game-side faults: reject -> refund,
 # manual drills:
 
 ```bash
-# force the next sale's payout to fail → rollback + auto-refund:
+# force the next sale's payout to fail → release + auto-refund:
 curl -X POST localhost:8002/v1/sales/<sale_id>/fail -H 'X-Escrow-Secret: dev-secret'
 
 # crash the escrow mid-sale (tap QR, then immediately):
 docker compose restart escrow     # reconcile loop resumes held sales on startup
 
 # game crash mid-sale (tap QR, then): restart the game process
-#   → execute_sale 409s (stateless DB wiped the listing) → cancel → refund
+#   → reserve_sale 409s (stateless DB wiped the listing) → release + cancel → refund
+#   (a game crash AFTER settle loses the reservation: commit 409s → ERROR
+#    "PAID, UNDELIVERED" — the demo game's wipe-on-start is not a real game)
 ```
 
 ## 5. Peeking at the ledgers

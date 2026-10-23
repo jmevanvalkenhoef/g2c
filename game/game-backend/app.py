@@ -3,13 +3,16 @@
 Two hats (kept in ONE process for the PoC, but TWO clearly separated API groups):
 
   1. GAME API (/v1/...)  — player-facing: players, items, listings, purchases.
-  2. ESCROW CONTRACT (/execute_sale, /sale_status, /rollback_sale, /internal/...)
+  2. ESCROW CONTRACT (/reserve_sale, /commit_sale, /release_sale, /sale_status,
+     /internal/...)
      — the spec §3.2 surface the escrow service calls. Any escrow that honors
      this contract (stub today, real Lightning escrow tomorrow) can be swapped
      in by changing GAME_BACKEND's ESCROW_URL config only.
 
-Ownership truth lives in SQLite. execute_sale/rollback_sale are atomic,
+Ownership truth lives in SQLite. reserve/commit/release are atomic and
 idempotent on payment_hash — that is what makes the escrow's guarantees real.
+A reserved item is FROZEN: it can't be listed, traded or moved until the
+escrow commits it (after the money is final) or releases it.
 """
 import hashlib
 import hmac
@@ -37,7 +40,7 @@ GAME_ADMIN_TOKEN = os.environ.get("GAME_ADMIN_TOKEN", "")  # required for
 # lab  -> escrow pays the lab's seller node (regtest)
 # real -> escrow resolves the seller's own payout method (lnurl/nwc, signet+)
 # an escrow call that timed out may still have minted an invoice: keep the
-# listing reserved until that invoice can no longer be paid, then reopen it
+# listing held until that invoice can no longer be paid, then reopen it
 AMBIGUOUS_HOLD_S = int(os.environ.get("AMBIGUOUS_HOLD_S", "900"))
 
 ARCHETYPES = [
@@ -100,7 +103,8 @@ def init_db(drop: bool = False) -> None:
             CREATE TABLE IF NOT EXISTS items (
               id      INTEGER PRIMARY KEY,
               name    TEXT NOT NULL,
-              owner_id INTEGER NOT NULL REFERENCES players(id)
+              owner_id INTEGER NOT NULL REFERENCES players(id),
+              reserved_by TEXT                   -- payment_hash of the sale freezing it
             );
             CREATE TABLE IF NOT EXISTS listings (
               id         INTEGER PRIMARY KEY,
@@ -108,7 +112,7 @@ def init_db(drop: bool = False) -> None:
               seller_id  INTEGER NOT NULL REFERENCES players(id),
               price_msat INTEGER NOT NULL CHECK (price_msat > 0),
               status     TEXT NOT NULL DEFAULT 'open', -- open|in_flight|completed|cancelled
-              in_flight_until INTEGER                  -- ambiguous reservation expiry
+              in_flight_until INTEGER                  -- ambiguous hold expiry
             );
             -- escrow contract state, idempotency anchored on payment_hash
             CREATE TABLE IF NOT EXISTS sales (
@@ -116,9 +120,8 @@ def init_db(drop: bool = False) -> None:
               item_id      INTEGER NOT NULL,
               buyer_id     INTEGER NOT NULL,
               seller_id    INTEGER NOT NULL,
-              listing_id   INTEGER,                    -- set on execute, used by rollback
-              status       TEXT NOT NULL,            -- done|rolled_back
-              final        INTEGER NOT NULL DEFAULT 0, -- escrow reported completed
+              listing_id   INTEGER,                    -- the listing being sold
+              status       TEXT NOT NULL,            -- reserved|committed|released
               created_at   TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS purchases (
@@ -181,9 +184,9 @@ def _pw_hash(password: str, salt: str) -> str:
                           n=2**14, r=8, p=1).hex()
 
 
-def release_stale_reservations(conn) -> None:
+def release_stale_holds(conn) -> None:
     """Reopen listings held for an ambiguous escrow call whose invoice can
-    no longer be paid."""
+    no longer be paid (a listing hold, not an item reservation)."""
     conn.execute(
         "UPDATE listings SET status='open', in_flight_until=NULL "
         "WHERE status='in_flight' AND in_flight_until IS NOT NULL "
@@ -204,14 +207,14 @@ class PurchaseIn(BaseModel):
     listing_id: int
 
 
-class ExecuteSaleIn(BaseModel):
+class ReserveIn(BaseModel):
     item_id: int
     buyer_id: int
     seller_id: int
     idempotency_key: str
 
 
-class RollbackIn(BaseModel):
+class SaleKeyIn(BaseModel):
     idempotency_key: str
     reason: str = ""
 
@@ -299,7 +302,7 @@ async def update_profile(body: ProfileIn, request: Request, response: Response,
 @app.get("/v1/items")
 def items():
     with tx() as conn:
-        release_stale_reservations(conn)
+        release_stale_holds(conn)
         rows = conn.execute(
             """SELECT i.id, i.name, i.owner_id, p.name AS owner_name,
                       l.id AS listing_id, l.price_msat, l.status AS listing_status
@@ -314,13 +317,10 @@ def items():
 async def create_listing(body: ListingIn, request: Request, response: Response):
     seller = (await require_player(request, response))["id"]
     with tx() as conn:
-        release_stale_reservations(conn)
-        # an item received in a sale the escrow hasn't finalised yet can
-        # still be rolled back to its seller: it must not be resold before
-        if conn.execute(
-                "SELECT 1 FROM sales WHERE item_id=? AND status='done' AND final=0",
-                (body.item_id,)).fetchone():
-            raise HTTPException(409, "item is still settling from its last sale")
+        release_stale_holds(conn)
+        if conn.execute("SELECT 1 FROM items WHERE id=? AND reserved_by IS NOT NULL",
+                        (body.item_id,)).fetchone():
+            raise HTTPException(409, "item is frozen by a sale in progress")
         # purge old listing rows for this item (completed/cancelled) so the
         # UNIQUE(item_id) constraint allows re-listing for back-and-forth trades
         conn.execute(
@@ -352,7 +352,7 @@ async def cancel_listing(listing_id: int, request: Request, response: Response):
 @app.get("/v1/market")
 def market():
     with tx() as conn:
-        release_stale_reservations(conn)
+        release_stale_holds(conn)
         rows = conn.execute(
             """SELECT l.id, l.item_id, l.price_msat, i.name AS item_name,
                       p.name AS seller_name
@@ -368,7 +368,7 @@ async def purchase(body: PurchaseIn, request: Request, response: Response):
     return a payment request. Game never touches sats."""
     buyer = (await require_player(request, response))["id"]
     with tx() as conn:
-        release_stale_reservations(conn)
+        release_stale_holds(conn)
         row = conn.execute(
             """SELECT l.item_id, l.seller_id, l.price_msat
                FROM listings l WHERE l.id=? AND l.status='open'""",
@@ -414,7 +414,7 @@ async def purchase(body: PurchaseIn, request: Request, response: Response):
         raise HTTPException(409, f"escrow refused: {r.text}")
     if r is None or r.status_code >= 500:
         # AMBIGUOUS: the escrow may have minted an invoice we never saw, and
-        # it would never tell us about it. Keep the listing reserved until
+        # it would never tell us about it. Keep the listing held until
         # such an invoice must have expired, then it reopens by itself.
         with tx() as conn:
             conn.execute(
@@ -470,46 +470,109 @@ async def simulate_pay(payment_hash: str, request: Request, response: Response):
 
 # ---------------------------------------------------------------- ESCROW CONTRACT (spec §3.2)
 
-@app.post("/execute_sale")
-def execute_sale(body: ExecuteSaleIn, x_escrow_secret: str = Header(default="")):
+def _rejected(reason: str) -> JSONResponse:
+    return JSONResponse({"status": "rejected", "reason": reason}, 409)
+
+
+@app.post("/reserve_sale")
+def reserve_sale(body: ReserveIn, x_escrow_secret: str = Header(default="")):
+    """Freeze the item at the seller for this sale. Called once the buyer's
+    payment is held; nothing changes hands yet."""
     check_secret(x_escrow_secret)
     with tx() as conn:
         prior = conn.execute(
             "SELECT status FROM sales WHERE payment_hash=?",
             (body.idempotency_key,)).fetchone()
-        if prior and prior["status"] == "done":
-            return {"status": "already_done"}
-        if prior and prior["status"] == "rolled_back":
-            # allow re-execution after a rollback of the same key
-            pass
+        if prior and prior["status"] == "reserved":
+            return {"status": "already_reserved"}
+        if prior and prior["status"] == "committed":
+            return {"status": "already_committed"}
+        if prior:                                   # released: the key is spent
+            return _rejected("sale_released")
         listing = conn.execute(
             "SELECT id FROM listings WHERE item_id=? AND seller_id=? "
             "AND status IN ('open','in_flight')",
             (body.item_id, body.seller_id)).fetchone()
         item = conn.execute(
-            "SELECT owner_id FROM items WHERE id=?", (body.item_id,)).fetchone()
-        if not listing or not item or item["owner_id"] != body.seller_id:
-            return JSONResponse(
-                {"status": "rejected", "reason": "item_unavailable"}, 409)
-        conn.execute(
-            "UPDATE items SET owner_id=? WHERE id=? AND owner_id=?",
-            (body.buyer_id, body.item_id, body.seller_id))
-        conn.execute(
-            "UPDATE listings SET status='completed' WHERE id=?", (listing["id"],))
+            "SELECT owner_id, reserved_by FROM items WHERE id=?",
+            (body.item_id,)).fetchone()
+        if (not listing or not item or item["owner_id"] != body.seller_id
+                or item["reserved_by"] is not None):
+            return _rejected("item_unavailable")
+        conn.execute("UPDATE items SET reserved_by=? WHERE id=?",
+                     (body.idempotency_key, body.item_id))
+        conn.execute("UPDATE listings SET status='in_flight', in_flight_until=NULL "
+                     "WHERE id=?", (listing["id"],))
         conn.execute(
             """INSERT INTO sales(payment_hash, item_id, buyer_id, seller_id,
                                  listing_id, status)
-               VALUES (?,?,?,?,?, 'done')
-               ON CONFLICT(payment_hash) DO UPDATE SET status='done'""",
+               VALUES (?,?,?,?,?, 'reserved')""",
             (body.idempotency_key, body.item_id, body.buyer_id, body.seller_id,
              listing["id"]))
-        # the purchase completes on the escrow's "completed" webhook, not
-        # here: the seller payout can still fail and roll this back
-    return {"status": "done"}
+    return {"status": "reserved"}
+
+
+@app.post("/commit_sale")
+def commit_sale(body: SaleKeyIn, x_escrow_secret: str = Header(default="")):
+    """Hand the frozen item to the buyer. Called only after the money is
+    final, so this must not fail for a reserved sale."""
+    check_secret(x_escrow_secret)
+    with tx() as conn:
+        sale = conn.execute(
+            "SELECT status, item_id, buyer_id, listing_id FROM sales "
+            "WHERE payment_hash=?", (body.idempotency_key,)).fetchone()
+        if sale is None:
+            return _rejected("unknown_sale")
+        if sale["status"] == "committed":
+            return {"status": "already_committed"}
+        if sale["status"] != "reserved":
+            return _rejected(f"sale_{sale['status']}")
+        conn.execute("UPDATE items SET owner_id=?, reserved_by=NULL "
+                     "WHERE id=? AND reserved_by=?",
+                     (sale["buyer_id"], sale["item_id"], body.idempotency_key))
+        conn.execute("UPDATE listings SET status='completed' WHERE id=?",
+                     (sale["listing_id"],))
+        conn.execute("UPDATE sales SET status='committed' WHERE payment_hash=?",
+                     (body.idempotency_key,))
+        conn.execute("UPDATE purchases SET status='completed' WHERE payment_hash=?",
+                     (body.idempotency_key,))
+    return {"status": "committed"}
+
+
+@app.post("/release_sale")
+def release_sale(body: SaleKeyIn, x_escrow_secret: str = Header(default="")):
+    """Unfreeze the item (it never left the seller) and reopen its listing.
+    Refused once committed: that item belongs to the buyer now."""
+    check_secret(x_escrow_secret)
+    with tx() as conn:
+        sale = conn.execute(
+            "SELECT status, item_id, listing_id FROM sales WHERE payment_hash=?",
+            (body.idempotency_key,)).fetchone()
+        if sale is None:
+            # never reserved here (e.g. reserve was rejected or never arrived);
+            # record it so a late reserve with this key can't land afterwards
+            conn.execute(
+                """INSERT INTO sales(payment_hash, item_id, buyer_id, seller_id, status)
+                   VALUES (?, 0, 0, 0, 'released')""", (body.idempotency_key,))
+            return {"status": "not_found_ignored"}
+        if sale["status"] == "released":
+            return {"status": "already_released"}
+        if sale["status"] == "committed":
+            return _rejected("sale_committed")
+        conn.execute("UPDATE items SET reserved_by=NULL WHERE id=? AND reserved_by=?",
+                     (sale["item_id"], body.idempotency_key))
+        conn.execute("UPDATE listings SET status='open' WHERE id=? AND status='in_flight'",
+                     (sale["listing_id"],))
+        conn.execute("UPDATE sales SET status='released' WHERE payment_hash=?",
+                     (body.idempotency_key,))
+        conn.execute("UPDATE purchases SET status='cancelled' WHERE payment_hash=?",
+                     (body.idempotency_key,))
+    return {"status": "released"}
 
 
 @app.get("/sale_status")
 def sale_status(key: str, x_escrow_secret: str = Header(default="")):
+    """reserved | committed | released | not_found (for reconciliation)"""
     check_secret(x_escrow_secret)
     with db() as conn:
         row = conn.execute(
@@ -517,35 +580,9 @@ def sale_status(key: str, x_escrow_secret: str = Header(default="")):
     return {"status": row["status"] if row else "not_found"}
 
 
-@app.post("/rollback_sale")
-def rollback_sale(body: RollbackIn, x_escrow_secret: str = Header(default="")):
-    check_secret(x_escrow_secret)
-    with tx() as conn:
-        prior = conn.execute(
-            "SELECT status, item_id, buyer_id, seller_id, listing_id FROM sales "
-            "WHERE payment_hash=?", (body.idempotency_key,)).fetchone()
-        if prior is None:
-            return {"status": "not_found_ignored"}
-        if prior["status"] == "rolled_back":
-            return {"status": "already_rolled_back"}
-        # revert ownership + reopen exactly the listing that was executed
-        conn.execute(
-            "UPDATE items SET owner_id=? WHERE id=? AND owner_id=?",
-            (prior["seller_id"], prior["item_id"], prior["buyer_id"]))
-        if prior["listing_id"] is not None:
-            conn.execute(
-                "UPDATE listings SET status='open' WHERE id=? AND status='completed'",
-                (prior["listing_id"],))
-        conn.execute(
-            "UPDATE sales SET status='rolled_back' WHERE payment_hash=?",
-            (body.idempotency_key,))
-        conn.execute(
-            "UPDATE purchases SET status='cancelled' WHERE payment_hash=?",
-            (body.idempotency_key,))
-    return {"status": "rolled_back"}
-
-
-# optional webhook from escrow (spec §3.1): terminal state notification
+# optional webhook from escrow (spec §3.1): terminal state notification.
+# Ownership is settled by commit/release; this only closes purchases that
+# never got that far (e.g. invoice expired unpaid).
 @app.post("/internal/sale_result")
 def sale_result(body: SaleResultIn, x_escrow_secret: str = Header(default="")):
     check_secret(x_escrow_secret)
@@ -554,8 +591,6 @@ def sale_result(body: SaleResultIn, x_escrow_secret: str = Header(default="")):
             conn.execute(
                 "UPDATE purchases SET status='completed' WHERE payment_hash=?",
                 (body.payment_hash,))
-            conn.execute(
-                "UPDATE sales SET final=1 WHERE payment_hash=?", (body.payment_hash,))
     elif body.result == "cancelled":
         with tx() as conn:
             conn.execute(

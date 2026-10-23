@@ -179,7 +179,7 @@ def main():
         sys.exit("game failed to boot on :8000 (see /tmp/g2c_game.log)")
     login_players()
 
-    targets = ["HTLC_HELD", "EXECUTING", "PAYING_SELLER", "SETTLING"]
+    targets = ["HTLC_HELD", "RESERVING", "PAYING_SELLER", "SETTLING", "COMMITTING"]
     alice_items = [i["id"] for i in req(f"{GAME}/v1/items")[1]
                    if i["owner_name"] == "alice"]
     results = []

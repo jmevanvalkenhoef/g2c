@@ -45,7 +45,7 @@ curl localhost:8080/debug/sales        # mock game DB state
 Restart with a global fault mode:
 
 ```bash
-FAULT_MODE=reject docker compose up -d mock-game      # execute_sale → 409
+FAULT_MODE=reject docker compose up -d mock-game      # reserve_sale → 409
 FAULT_MODE=timeout docker compose up -d mock-game     # ambiguous outcomes → retry/sale_status
 FAULT_MODE=server_error docker compose up -d mock-game
 ```

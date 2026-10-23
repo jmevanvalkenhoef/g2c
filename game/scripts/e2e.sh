@@ -5,7 +5,8 @@
 #   e2e.sh --real   against the REAL escrow (requires the poc/ lab up with
 #                   channels + gossip; boots only the game, ESCROW_URL=:8002)
 #
-# Happy path, failure path, idempotency replays, double-pay guard.
+# Happy path (reserve -> commit), failure path (reserve -> release),
+# idempotency replays, double-pay guard.
 # Exit code != 0 on any failure.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -89,10 +90,16 @@ check "no transfer before QR tap" "alice" "$(field 1 owner_name)"
 g /v1/purchases/$PH/simulate-pay $BOB -X POST > /dev/null
 check "purchase completed" "completed" "$(wait_purchase $PH completed)"
 check "item transferred" "bob" "$(field 1 owner_name)"
-check "execute_sale replay idempotent" "already_done" \
-  "$(gs /execute_sale -X POST -H 'Content-Type: application/json' \
+check "commit replay idempotent" "already_committed" \
+  "$(gs /commit_sale -X POST -H 'Content-Type: application/json' \
+     -d "{\"idempotency_key\":\"$PH\"}" | jget "['status']")"
+check "reserve replay after commit" "already_committed" \
+  "$(gs /reserve_sale -X POST -H 'Content-Type: application/json' \
      -d "{\"item_id\":1,\"buyer_id\":$BOB,\"seller_id\":$ALICE,\"idempotency_key\":\"$PH\"}" | jget "['status']")"
-check "sale_status done" "done" "$(gs "/sale_status?key=$PH" | jget "['status']")"
+check "release after commit refused" "rejected" \
+  "$(gs /release_sale -X POST -H 'Content-Type: application/json' \
+     -d "{\"idempotency_key\":\"$PH\"}" | jget "['status']")"
+check "sale_status committed" "committed" "$(gs "/sale_status?key=$PH" | jget "['status']")"
 
 # ---------------------------------------------------------------- failure path
 echo "== failure path =="
@@ -104,11 +111,14 @@ curl -s -X POST -H 'X-Escrow-Secret: dev-secret' localhost:$ESCROW/v1/sales/$SID
 sleep 1
 g /v1/purchases/$PH2/simulate-pay $BOB -X POST > /dev/null
 check "purchase cancelled" "cancelled" "$(wait_purchase $PH2 cancelled)"
-check "item returned to seller" "alice" "$(field 3 owner_name)"
+check "item stayed with seller" "alice" "$(field 3 owner_name)"
 check "listing reopened" "open" "$(field 3 listing_status)"
-check "rollback replay idempotent" "already_rolled_back" \
-  "$(gs /rollback_sale -X POST -H 'Content-Type: application/json' \
+check "release replay idempotent" "already_released" \
+  "$(gs /release_sale -X POST -H 'Content-Type: application/json' \
      -d "{\"idempotency_key\":\"$PH2\",\"reason\":\"replay\"}" | jget "['status']")"
+check "released key can't be reserved again" "rejected" \
+  "$(gs /reserve_sale -X POST -H 'Content-Type: application/json' \
+     -d "{\"item_id\":3,\"buyer_id\":$BOB,\"seller_id\":$ALICE,\"idempotency_key\":\"$PH2\"}" | jget "['status']")"
 
 # ---------------------------------------------------------------- double-pay guard
 echo "== double-pay guard =="

@@ -8,9 +8,9 @@ point of view, §3.2 from ours):
 
 and drives the game API exactly like the real state machine will:
 
-  hold "HTLC" (1s) -> execute_sale (idempotent) -> "pay seller" (1s)
-  -> completed, webhook /internal/sale_result
-  ...or on failure -> rollback_sale + sale_result cancelled (buyer "refunded").
+  hold "HTLC" (1s) -> reserve_sale (item frozen) -> "pay seller" (1s)
+  -> "settle" -> commit_sale (item to buyer) -> webhook /internal/sale_result
+  ...or on failure -> release_sale + sale_result cancelled (buyer "refunded").
 
 Swap in the real escrow later by pointing the game's ESCROW_URL elsewhere.
 Nothing else changes.
@@ -44,9 +44,9 @@ _counter = 0
 
 app = FastAPI(title="g2c escrow stub")
 
-STATES = ["CREATED", "AWAITING_PAYMENT", "HTLC_HELD", "EXECUTING",
-          "PAYING_SELLER", "SETTLING", "COMPLETED",
-          "ROLLING_BACK", "CANCELLING", "CANCELLED"]
+STATES = ["CREATED", "AWAITING_PAYMENT", "HTLC_HELD", "RESERVING",
+          "PAYING_SELLER", "SETTLING", "COMMITTING", "COMPLETED",
+          "RELEASING", "CANCELLING", "CANCELLED"]
 
 
 class SaleIn(BaseModel):
@@ -84,33 +84,31 @@ async def _drive(sale: dict) -> None:
     try:
         await step("HTLC_HELD", 1.0)          # buyer "payment" locked
 
-        await step("EXECUTING", 0.2)
-        r = await _game_call("POST", "/execute_sale", json={
+        await step("RESERVING", 0.2)
+        r = await _game_call("POST", "/reserve_sale", json={
             "item_id": sale["req"]["item_id"],
             "buyer_id": sale["req"]["buyer_id"],
             "seller_id": sale["req"]["seller_id"],
             "idempotency_key": key,
         })
-        if r.status_code == 409:
-            await step("CANCELLING", 0.3)     # item unavailable -> buyer refunded
+        if r.status_code == 409 or sale.get("force_fail"):
+            # item unavailable, or (debug) the seller payout "failed":
+            # unfreeze the item, then refund the buyer
+            await step("RELEASING", 0.5)
+            await _game_call("POST", "/release_sale", json={
+                "idempotency_key": key, "reason": "sale_failed"})
+            await step("CANCELLING", 0.3)
             sale["state"] = "CANCELLED"
-            sale["failure_reason"] = "execute_sale rejected"
-            await _game_call("POST", "/internal/sale_result",
-                             json={"payment_hash": key, "result": "cancelled"})
-            return
-
-        if sale.get("force_fail"):
-            await step("ROLLING_BACK", 0.5)   # seller payout failed -> unwind
-            await _game_call("POST", "/rollback_sale", json={
-                "idempotency_key": key, "reason": "seller_payment_failed"})
-            sale["state"] = "CANCELLED"
-            sale["failure_reason"] = "forced failure (debug)"
+            sale["failure_reason"] = ("reserve_sale rejected" if r.status_code == 409
+                                      else "forced failure (debug)")
             await _game_call("POST", "/internal/sale_result",
                              json={"payment_hash": key, "result": "cancelled"})
             return
 
         await step("PAYING_SELLER", 1.0)      # seller invoice paid (X - fee)
-        await step("SETTLING", 0.3)           # preimage released
+        await step("SETTLING", 0.3)           # preimage released: money final
+        await step("COMMITTING", 0.2)
+        await _game_call("POST", "/commit_sale", json={"idempotency_key": key})
         sale["state"] = "COMPLETED"
         await _game_call("POST", "/internal/sale_result",
                          json={"payment_hash": key, "result": "completed"})

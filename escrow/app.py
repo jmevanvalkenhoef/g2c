@@ -11,24 +11,31 @@ API surface (identical to escrow-stub, so the game swaps by ESCROW_URL):
 
 Money flow: hold invoice created HASH-ONLY at the node (LND v2 invoices API —
 the node cannot settle without our preimage) -> HTLC arrival detected ->
-item transfers at the game (idempotent, keyed on payment_hash) -> seller
-payout (PayoutResolver: lnurl/nwc; resolved invoice persisted BEFORE paying,
-recovered by payment hash after crashes) -> settle. Any failure before the
-payout: rollback + cancel = buyer auto-refunded by Lightning itself.
+game RESERVES the item (frozen at the seller, idempotent on payment_hash) ->
+seller payout (PayoutResolver: lnurl/nwc; resolved invoice persisted BEFORE
+paying, recovered by payment hash after crashes) -> settle -> game COMMITS
+the item to the buyer. Any failure before the payout: release + cancel =
+item unfrozen, buyer auto-refunded by Lightning itself. Nothing is ever
+undone: an item only moves once, after the money is final.
+
+Commit comes AFTER settle on purpose: once the seller is paid the money is
+locked in while the buyer's HTLC is still valid, and commit (a promise on a
+frozen item) can then be retried for as long as the game is down.
 
 Money-safety invariants (each one closes a way to pay the seller AND refund
 the buyer):
-  1. Never roll back while the seller payment is in flight or complete —
+  1. Never release or refund while the seller payment is in flight or complete —
      only a payment the node reports FAILED (or never initiated) unlocks
-     ROLLING_BACK. "Timed out" is not "failed".
+     RELEASING. "Timed out" is not "failed".
   2. Never start a payout unless the buyer's HTLC is still ACCEPTED with
      enough blocks left, and cap the payout route's timelock below the
      buyer HTLC's expiry (like a forwarding node), so the payout resolves
      before LND could auto-cancel the incoming side.
   3. After a settle error, ask the node what happened; never infer COMPLETED
      from error text.
-  4. Roll back the item BEFORE refunding, and only refund once the game
-     confirmed the rollback.
+  4. Release the item BEFORE refunding, and only refund once the game
+     confirmed the release (a reserved item must never stay frozen for a
+     refunded buyer, nor be committed to one).
 
 Crash recovery: every non-terminal sale is re-driven by the reconcile loop;
 all steps idempotent. Each sale is driven in its own task, so a slow leg
@@ -75,7 +82,7 @@ HOLD_CLTV_EXPIRY = int(os.environ.get("HOLD_CLTV_EXPIRY", "288"))
 HOLD_SAFETY_BLOCKS = int(os.environ.get("HOLD_SAFETY_BLOCKS", "24"))
 # below this many usable blocks we refund instead of starting a payout
 MIN_PAYOUT_CLTV = int(os.environ.get("MIN_PAYOUT_CLTV", "60"))
-EXECUTE_RETRIES = int(os.environ.get("EXECUTE_RETRIES", "5"))
+GAME_RETRIES = int(os.environ.get("GAME_RETRIES", "5"))
 PAYOUT_RETRIES = int(os.environ.get("PAYOUT_RETRIES", "3"))
 PAYOUT_TIMEOUT_S = int(os.environ.get("PAYOUT_TIMEOUT_S", "15"))
 LOOP_INTERVAL = float(os.environ.get("LOOP_INTERVAL", "0.5"))
@@ -104,8 +111,8 @@ app = FastAPI(title="g2c escrow")
 
 # ---------------------------------------------------------------- state
 
-NON_TERMINAL = ("AWAITING_PAYMENT", "HTLC_HELD", "EXECUTING", "PAYING_SELLER",
-                "SETTLING", "ROLLING_BACK", "CANCELLING")
+NON_TERMINAL = ("AWAITING_PAYMENT", "HTLC_HELD", "RESERVING", "PAYING_SELLER",
+                "SETTLING", "COMMITTING", "RELEASING", "CANCELLING")
 # ERROR is terminal and needs a human: failure_reason says why
 
 
@@ -236,45 +243,51 @@ def game_headers() -> dict:
     return {"X-Escrow-Secret": SHARED_SECRET} if SHARED_SECRET else {}
 
 
-async def game_execute(sale: dict) -> str:
-    """returns 'done' | 'already_done' | 'rejected' — raises on transient errors"""
+async def game_call(path: str, body: dict) -> Optional[tuple[int, dict]]:
+    """POST to the game contract; returns the first DEFINITIVE answer (200 or
+    409) as (status, json), or None when every attempt was transient
+    (timeout, 5xx, garbage) — an ambiguous outcome the caller retries."""
     async with httpx.AsyncClient(timeout=10) as client:
-        for attempt in range(EXECUTE_RETRIES):
+        for attempt in range(GAME_RETRIES):
             try:
-                r = await client.post(f"{GAME_URL}/execute_sale", headers=game_headers(),
-                                      json={"item_id": sale["item_id"],
-                                            "buyer_id": sale["buyer_id"],
-                                            "seller_id": sale["seller_id"],
-                                            "idempotency_key": sale["payment_hash"]})
-                if r.status_code == 200:
-                    return r.json().get("status", "done")
-                if r.status_code == 409:
-                    return "rejected"
-                print(f"[escrow] execute_sale {r.status_code}, attempt {attempt+1}")
-            except httpx.HTTPError as e:
-                print(f"[escrow] execute_sale error: {e}")
-            await asyncio.sleep(0.5 * (attempt + 1))
-    raise ConnectionError("execute_sale kept failing (ambiguous)")
-
-
-async def game_rollback(sale: dict) -> bool:
-    """True only once the game confirmed the item is back with the seller
-    (or was never moved). Refunding before that gives the buyer the item
-    for free."""
-    async with httpx.AsyncClient(timeout=10) as client:
-        for attempt in range(3):
-            try:
-                r = await client.post(f"{GAME_URL}/rollback_sale", headers=game_headers(),
-                                      json={"idempotency_key": sale["payment_hash"],
-                                            "reason": sale.get("failure_reason") or "rollback"})
-                if r.status_code == 200 and r.json().get("status") in (
-                        "rolled_back", "already_rolled_back", "not_found_ignored"):
-                    return True
-                print(f"[escrow] rollback_sale {r.status_code}: {r.text[:150]}")
+                r = await client.post(f"{GAME_URL}{path}", headers=game_headers(),
+                                      json=body)
+                if r.status_code in (200, 409):
+                    return r.status_code, r.json()
+                print(f"[escrow] {path} {r.status_code}, attempt {attempt+1}")
             except (httpx.HTTPError, ValueError) as e:
-                print(f"[escrow] rollback_sale error: {e}")
-            await asyncio.sleep(0.5)
-    return False
+                print(f"[escrow] {path} error: {e}")
+            await asyncio.sleep(0.5 * (attempt + 1))
+    return None
+
+
+async def game_reserve(sale: dict) -> Optional[str]:
+    """'reserved' (incl. replays) | 'rejected' | None (ambiguous)"""
+    res = await game_call("/reserve_sale", {
+        "item_id": sale["item_id"], "buyer_id": sale["buyer_id"],
+        "seller_id": sale["seller_id"], "idempotency_key": sale["payment_hash"]})
+    if res is None:
+        return None
+    return "reserved" if res[0] == 200 else "rejected"
+
+
+async def game_commit(sale: dict) -> Optional[str]:
+    """'committed' (incl. replays) | 'rejected' | None (ambiguous)"""
+    res = await game_call("/commit_sale", {"idempotency_key": sale["payment_hash"]})
+    if res is None:
+        return None
+    return "committed" if res[0] == 200 else "rejected"
+
+
+async def game_release(sale: dict) -> Optional[str]:
+    """'released' (incl. replays and never-reserved) | 'rejected' (the game
+    says the sale is committed) | None (ambiguous)"""
+    res = await game_call("/release_sale", {
+        "idempotency_key": sale["payment_hash"],
+        "reason": sale.get("failure_reason") or "release"})
+    if res is None:
+        return None
+    return "released" if res[0] == 200 else "rejected"
 
 
 async def notify_game(payment_hash: str, result: str) -> bool:
@@ -365,26 +378,25 @@ async def drive(sale: dict) -> None:
         return
 
     if state == "HTLC_HELD":
-        set_state(sid, "EXECUTING")
+        set_state(sid, "RESERVING")
         return
 
-    if state == "EXECUTING":
+    if state == "RESERVING":
         verdict, _ = await asyncio.to_thread(htlc_budget, sale)
         if verdict == "unknown":
             return                      # node not answering: decide later
         if verdict != "ok":
-            # the buyer's HTLC is gone or about to be: the item must not
-            # stay transferred (execute may have landed on an earlier try)
-            set_state(sid, "ROLLING_BACK", f"buyer HTLC {verdict} before transfer")
+            # the buyer's HTLC is gone or about to be: unfreeze the item (a
+            # reserve may have landed on an earlier try) and close
+            set_state(sid, "RELEASING", f"buyer HTLC {verdict} before reserve")
             return
-        try:
-            outcome = await game_execute(sale)
-        except ConnectionError:
+        outcome = await game_reserve(sale)
+        if outcome is None:
             # ambiguous after retries — retried next tick (idempotent);
             # htlc_budget above refunds if the game stays down too long
             return
         if outcome == "rejected":
-            set_state(sid, "CANCELLING", "execute_sale rejected")
+            set_state(sid, "RELEASING", "reserve_sale rejected")
         else:
             set_state(sid, "PAYING_SELLER")
         return
@@ -398,17 +410,17 @@ async def drive(sale: dict) -> None:
         if ps == "pending":
             return                      # in flight: wait, never roll back
         if sale["payout_attempts"] >= PAYOUT_RETRIES:
-            set_state(sid, "ROLLING_BACK", f"seller payment failed x{sale['payout_attempts']}")
+            set_state(sid, "RELEASING", f"seller payment failed x{sale['payout_attempts']}")
             return
         if LAB_MODE and sale["force_fail"]:
-            set_state(sid, "ROLLING_BACK", "forced failure (debug)")
+            set_state(sid, "RELEASING", "forced failure (debug)")
             return
         # 2. only pay while the buyer's HTLC is still ours, with time to spare
         verdict, cltv_limit = await asyncio.to_thread(htlc_budget, sale)
         if verdict == "unknown":
             return
         if verdict != "ok":
-            set_state(sid, "ROLLING_BACK", f"buyer HTLC {verdict} before payout")
+            set_state(sid, "RELEASING", f"buyer HTLC {verdict} before payout")
             return
         # 3. resolve (once) and pay
         try:
@@ -418,7 +430,7 @@ async def drive(sale: dict) -> None:
             save_field(sid, "payout_attempts", attempts)
             print(f"[escrow] {sid} payout resolve attempt {attempts}: {e}")
             if attempts >= PAYOUT_RETRIES:
-                set_state(sid, "ROLLING_BACK", f"payout resolve failed: {e}")
+                set_state(sid, "RELEASING", f"payout resolve failed: {e}")
             return
         save_field(sid, "payout_attempts", sale["payout_attempts"] + 1)
         done, detail = await asyncio.to_thread(
@@ -434,28 +446,39 @@ async def drive(sale: dict) -> None:
         return
 
     if state == "SETTLING":
-        # NEVER rollback after a successful seller payment: settle is ours to keep retrying
+        # NEVER release after a successful seller payment: settle is ours to keep retrying
         try:
             await asyncio.to_thread(ESCROW_NODE.settle_hold_invoice,
                                     sale["preimage"])
-            finish(sid, "COMPLETED", notify="completed")
+            set_state(sid, "COMMITTING")
             return
         except NodeError as e:
             err = e
         st = await asyncio.to_thread(hold_state, sale["payment_hash"])
         if st == "settled":
-            finish(sid, "COMPLETED", notify="completed")
+            set_state(sid, "COMMITTING")
         elif st == "cancelled":
             # seller paid, buyer refunded: the one outcome the design exists
-            # to prevent. Item stays with the buyer (they did pay, then got
-            # refunded); a human has to reconcile.
-            finish(sid, "ERROR", f"LOSS: seller paid but buyer HTLC cancelled ({err})",
-                   notify="completed")
+            # to prevent. The item stays reserved (frozen) for a human to
+            # decide: commit (buyer keeps a free item) or release.
+            finish(sid, "ERROR", f"LOSS: seller paid but buyer HTLC cancelled ({err})")
         else:
             print(f"[escrow] {sid} settle error: {err} (invoice {st}, will retry)")
         return
 
-    if state == "ROLLING_BACK":
+    if state == "COMMITTING":
+        # money is final: commit is a promise on a frozen item, retried
+        # for as long as the game needs
+        outcome = await game_commit(sale)
+        if outcome == "committed":
+            finish(sid, "COMPLETED", notify="completed")
+        elif outcome == "rejected":
+            # buyer paid, seller paid, the game won't hand over the item
+            # (lost the reservation): a human must deliver or refund
+            finish(sid, "ERROR", "PAID, UNDELIVERED: commit_sale rejected")
+        return
+
+    if state == "RELEASING":
         # last line of defence for invariant 1, whichever path led here
         ps = await asyncio.to_thread(payout_state, sale)
         if ps == "complete":
@@ -463,9 +486,14 @@ async def drive(sale: dict) -> None:
             return
         if ps == "pending":
             return
-        if await game_rollback(sale):
+        outcome = await game_release(sale)
+        if outcome == "released":
             set_state(sid, "CANCELLING")
-        return                          # rollback unconfirmed: retry next tick
+        elif outcome == "rejected":
+            # the game says it already committed: the item went to a buyer
+            # we never got paid by. Never refund blindly — escalate.
+            finish(sid, "ERROR", "release_sale rejected: game reports committed")
+        return                          # ambiguous: retry next tick
 
     if state == "CANCELLING":
         try:

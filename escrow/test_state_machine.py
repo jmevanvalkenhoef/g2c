@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """State-machine money-safety tests: a fake node + fake game drive app.drive()
-through the failure paths that used to pay the seller AND refund the buyer.
+through the failure paths that used to pay the seller AND refund the buyer,
+and the reserve -> pay -> settle -> commit ordering.
 
 Run: uv run python test_state_machine.py
 """
@@ -88,30 +89,36 @@ class FakeResolver:
 
 
 class FakeGame:
+    """reserve/commit/release contract; an outcome of None = game down"""
     def __init__(self):
-        self.executed = []
-        self.rolled_back = []
-        self.rollback_ok = True
-        self.execute_outcome = "done"
+        self.reserved, self.committed, self.released = [], [], []
+        self.reserve_outcome = "reserved"
+        self.commit_outcome = "committed"
+        self.release_outcome = "released"
 
-    async def execute(self, sale):
-        if self.execute_outcome == "down":
-            raise ConnectionError("down")
-        self.executed.append(sale["payment_hash"])
-        return self.execute_outcome
+    async def reserve(self, sale):
+        if self.reserve_outcome == "reserved":
+            self.reserved.append(sale["payment_hash"])
+        return self.reserve_outcome
 
-    async def rollback(self, sale):
-        if self.rollback_ok:
-            self.rolled_back.append(sale["payment_hash"])
-        return self.rollback_ok
+    async def commit(self, sale):
+        if self.commit_outcome == "committed":
+            self.committed.append(sale["payment_hash"])
+        return self.commit_outcome
+
+    async def release(self, sale):
+        if self.release_outcome == "released":
+            self.released.append(sale["payment_hash"])
+        return self.release_outcome
 
 
 def fresh():
     node, game = FakeNode(), FakeGame()
     app.ESCROW_NODE = node
     app.RESOLVER = FakeResolver()
-    app.game_execute = game.execute
-    app.game_rollback = game.rollback
+    app.game_reserve = game.reserve
+    app.game_commit = game.commit
+    app.game_release = game.release
     return node, game
 
 
@@ -156,44 +163,46 @@ sid, h = new_sale(node)
 node.hold[h] = "accepted"
 check("completes", "COMPLETED", run(sid))
 check("buyer HTLC settled", "settled", node.hold[h])
+check("item committed", [h], game.committed)
 check("routing fee capped at the sale fee", 2000, node.pay_calls[0][1])
 check("payout CLTV capped below buyer HTLC", 200 - app.HOLD_SAFETY_BLOCKS,
       node.pay_calls[0][2])
 check("game webhook queued", "completed", app.load(sid)["notify_result"])
 
-print("== bug 1: payout still in flight is never rolled back ==")
+print("== bug 1: payout still in flight is never released ==")
 node, game = fresh()
 sid, h = new_sale(node)
 node.hold[h] = "accepted"
 node.pay_result = "pending"
 check("waits in PAYING_SELLER", "PAYING_SELLER", run(sid))
 check("paid once, not retried while pending", 1, len(node.pay_calls))
-check("no rollback", [], game.rolled_back)
+check("no release", [], game.released)
 check("no refund", [], node.cancelled)
 node.payments["pay-seller-" + sid] = "complete"     # the stuck HTLC lands
 check("then completes", "COMPLETED", run(sid))
 
-print("== payout definitively failed x3 -> rollback, then refund ==")
+print("== payout definitively failed x3 -> release, then refund ==")
 node, game = fresh()
 sid, h = new_sale(node)
 node.hold[h] = "accepted"
 node.pay_result = "failed"
 check("cancelled", "CANCELLED", run(sid))
 check("3 attempts", 3, len(node.pay_calls))
-check("item rolled back", [h], game.rolled_back)
+check("item released", [h], game.released)
+check("never committed", [], game.committed)
 check("buyer refunded", [h], node.cancelled)
 
 print("== bug 2: buyer HTLC gone during a game outage -> no payout ==")
 node, game = fresh()
 sid, h = new_sale(node)
 node.hold[h] = "accepted"
-game.execute_outcome = "down"
-check("stuck executing", "EXECUTING", run(sid))
+game.reserve_outcome = None
+check("stuck reserving", "RESERVING", run(sid))
 node.hold[h] = "cancelled"                           # LND auto-cancelled it
-game.execute_outcome = "done"
-check("rolled back + closed", "CANCELLED", run(sid))
+game.reserve_outcome = "reserved"
+check("released + closed", "CANCELLED", run(sid))
 check("seller never paid", [], node.pay_calls)
-check("rollback issued", [h], game.rolled_back)
+check("release issued", [h], game.released)
 
 print("== bug 2: too few blocks left -> refund instead of paying ==")
 node, game = fresh()
@@ -220,6 +229,7 @@ def pay_then_lose(*a):
 node.pay_invoice = pay_then_lose
 check("ERROR, not COMPLETED", "ERROR", run(sid))
 check("flagged as loss", True, app.load(sid)["failure_reason"].startswith("LOSS"))
+check("item left frozen for a human", [], game.committed + game.released)
 
 node, game = fresh()
 sid, h = new_sale(node)
@@ -260,26 +270,57 @@ try:
 except NodeError:
     pass
 check("stays PAYING_SELLER", "PAYING_SELLER", app.load(sid)["state"])
-check("no rollback", [], game.rolled_back)
+check("no release", [], game.released)
 
-print("== rollback unconfirmed -> no refund yet ==")
+print("== release unconfirmed -> no refund yet ==")
 node, game = fresh()
 sid, h = new_sale(node)
 node.hold[h] = "accepted"
-app.set_state(sid, "ROLLING_BACK", "test")
-game.rollback_ok = False
-check("stays ROLLING_BACK", "ROLLING_BACK", run(sid))
+app.set_state(sid, "RELEASING", "test")
+game.release_outcome = None
+check("stays RELEASING", "RELEASING", run(sid))
 check("buyer not refunded before item is back", [], node.cancelled)
-game.rollback_ok = True
+game.release_outcome = "released"
 check("then cancelled", "CANCELLED", run(sid))
 
-print("== rejected execute -> refund without rollback ==")
+print("== rejected reserve -> refund, never paid ==")
 node, game = fresh()
 sid, h = new_sale(node)
 node.hold[h] = "accepted"
-game.execute_outcome = "rejected"
+game.reserve_outcome = "rejected"
 check("cancelled", "CANCELLED", run(sid))
 check("refunded", [h], node.cancelled)
+check("seller never paid", [], node.pay_calls)
+
+print("== commit after settle: game outage only delays delivery ==")
+node, game = fresh()
+sid, h = new_sale(node)
+node.hold[h] = "accepted"
+game.commit_outcome = None
+check("waits in COMMITTING", "COMMITTING", run(sid))
+check("money already final", "settled", node.hold[h])
+check("no release, no refund", ([], []), (game.released, node.cancelled))
+game.commit_outcome = "committed"
+check("then completes", "COMPLETED", run(sid))
+check("delivered", [h], game.committed)
+
+print("== commit rejected after payment -> ERROR, never refunded ==")
+node, game = fresh()
+sid, h = new_sale(node)
+node.hold[h] = "accepted"
+game.commit_outcome = "rejected"
+check("ERROR", "ERROR", run(sid))
+check("flagged undelivered", True, app.load(sid)["failure_reason"].startswith("PAID, UNDELIVERED"))
+check("buyer payment kept (settled)", "settled", node.hold[h])
+
+print("== release rejected (game reports committed) -> ERROR, no refund ==")
+node, game = fresh()
+sid, h = new_sale(node)
+node.hold[h] = "accepted"
+app.set_state(sid, "RELEASING", "test")
+game.release_outcome = "rejected"
+check("ERROR", "ERROR", run(sid))
+check("not refunded", [], node.cancelled)
 
 print("== create_sale guards ==")
 from fastapi import HTTPException  # noqa: E402

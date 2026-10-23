@@ -7,15 +7,16 @@ with the shared secret. Replace either side; nothing else changes.
 ```
 game-backend (FastAPI + SQLite, :8000)          escrow-stub (FastAPI, :8001)
  ├─ /v1/...           player-facing (PWA)       ├─ POST /v1/sales  → payment_request
- ├─ /execute_sale  ◀──┼──────────────────────────┤   state machine: HTLC_HELD →
- ├─ /sale_status      │  HMAC-ish shared         │   EXECUTING → PAYING_SELLER → SETTLING
- ├─ /rollback_sale    │  secret (X-Escrow-Secret)│   (or ROLLING_BACK → CANCELLED)
+ ├─ /reserve_sale  ◀──┼──────────────────────────┤   state machine: HTLC_HELD →
+ ├─ /commit_sale      │  shared secret           │   RESERVING → PAYING_SELLER → SETTLING
+ ├─ /release_sale     │  (X-Escrow-Secret)       │   → COMMITTING (or RELEASING → CANCELLED)
+ ├─ /sale_status      │                          │
  ├─ /internal/sale_result ◀ webhook (optional)  └─ debug: /fail /pause /resume
  └─ serves game-web/ at /
 ```
 
-The stub mimics the real escrow's exact rhythm (1 s hold → execute → pay → settle,
-failure → rollback + cancel). The future Lightning escrow implements the same two
+The stub mimics the real escrow's exact rhythm (1 s hold → reserve → pay → settle
+→ commit, failure → release + cancel). The future Lightning escrow implements the same two
 surfaces — swapping is a `ESCROW_URL` config change.
 
 ## Run (uv)
@@ -33,8 +34,6 @@ cd game/escrow-stub && uv run uvicorn app:app --port 8001
 Login is name + password: the first login to a name (the seeded Alice and Bob
 included) sets its password, later logins must match. Sessions are random
 tokens (`X-Player-Session` header per tab, `session` cookie otherwise).
-An item received in a sale stays locked (not re-listable) until the escrow
-reports the sale `completed`, because until then it can still be rolled back.
 
 Env (defaults in parens) on the game: `ESCROW_URL` (localhost:8001),
 `ESCROW_SHARED_SECRET` (dev-secret). On the stub: `GAME_URL`
@@ -45,8 +44,8 @@ in the 201 as `fee_msat` + `seller_amount_msat`.
 ## Regression drill
 
 `game/scripts/e2e.sh` boots both services and runs the full contract through
-happy path, failure path (rollback + relisting), idempotency replays, and the
-double-pay guard — 12 checks, exits non-zero on failure. Run it after any change
+happy path (reserve → commit), failure path (reserve → release + relisting),
+idempotency replays, and the double-pay guard — 15 checks, exits non-zero on failure. Run it after any change
 to either side of the contract.
 
 ## Demo script
@@ -61,10 +60,15 @@ to either side of the contract.
 
 ## Contract notes (the part that makes swapping safe)
 
-- `execute_sale` is **atomic + idempotent** on `idempotency_key` (= payment_hash):
-  one SQLite transaction moves item ownership, completes the listing, upserts the
-  sale row. Replays return `already_done`. 409 = definitive rejection.
-- `rollback_sale` reverts ownership and reopens the listing; idempotent.
+- `reserve_sale` **freezes** the item at the seller (`items.reserved_by`); a frozen
+  item can't be listed, unlisted or sold again. Replays return `already_reserved`,
+  409 = definitive rejection (item unavailable, or the key was already released).
+- `commit_sale` hands the frozen item to the buyer. The escrow calls it only after
+  the buyer's payment is final, and retries it until it lands.
+- `release_sale` unfreezes the item and reopens its listing; refused once
+  committed. Releasing an unknown key records it, so a late reserve can't land.
+- Every call is one SQLite transaction, idempotent on `idempotency_key` (= payment_hash).
+  Nothing is ever undone: ownership changes once, at commit.
 - The escrow never learns player names; the game never sees sats.
 - SQLite rows `sales` / `purchases` are the reconciliation surface
   (`GET /sale_status?key=`).
