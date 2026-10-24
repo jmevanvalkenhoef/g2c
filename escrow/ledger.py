@@ -156,45 +156,39 @@ def balances(conn, until: Optional[str] = None) -> dict:
     return {r["account"]: r["s"] for r in conn.execute(q + " GROUP BY account", args)}
 
 
+OUTCOMES = {"COMPLETED": "completed", "CANCELLED": "cancelled", "ERROR": "errors"}
+# account -> (report column, sign that makes it positive)
+COLUMNS = {"revenue:fees": ("fees_msat", -1), "expense:routing": ("routing_msat", 1),
+           "expense:losses": ("losses_msat", 1)}
+
+
 def summary(conn, start: str, end: str) -> dict:
     """Per UTC day between start and end (YYYY-MM-DD, inclusive): outcomes,
     volume, fees, costs and net; plus balances and exposure at `end`."""
     days: dict[str, dict] = {}
 
     def day(d):
-        return days.setdefault(d, {
-            "completed": 0, "cancelled": 0, "errors": 0, "volume_msat": 0,
-            "fees_msat": 0, "routing_msat": 0, "losses_msat": 0})
+        return days.setdefault(d, dict.fromkeys(
+            [*OUTCOMES.values(), "volume_msat", *(c for c, _ in COLUMNS.values())], 0))
 
     for r in conn.execute(
             "SELECT substr(at, 1, 10) d, to_state, COUNT(*) n FROM sale_events "
             "WHERE to_state IN ('COMPLETED', 'CANCELLED', 'ERROR') "
             "AND substr(at, 1, 10) BETWEEN ? AND ? GROUP BY d, to_state", (start, end)):
-        key = {"COMPLETED": "completed", "CANCELLED": "cancelled", "ERROR": "errors"}
-        day(r["d"])[key[r["to_state"]]] = r["n"]
+        day(r["d"])[OUTCOMES[r["to_state"]]] = r["n"]
+    # volume = what buyers paid in: the only money entering assets:lightning
     for r in conn.execute(
             "SELECT substr(at, 1, 10) d, account, SUM(amount_msat) s, "
-            "SUM(CASE WHEN entry LIKE '%:buyer_settled' AND amount_msat > 0 "
-            "    THEN amount_msat ELSE 0 END) vol "
-            "FROM ledger WHERE substr(at, 1, 10) BETWEEN ? AND ? "
-            "GROUP BY d, account", (start, end)):
-        dd = day(r["d"])
-        if r["account"] == "revenue:fees":
-            dd["fees_msat"] = -r["s"]
-        elif r["account"] == "expense:routing":
-            dd["routing_msat"] = r["s"]
-        elif r["account"] == "expense:losses":
-            dd["losses_msat"] = r["s"]
-        elif r["account"] == "assets:lightning":
-            dd["volume_msat"] = r["vol"]
-    rows = []
-    for d in sorted(days):
-        dd = days[d]
-        dd["net_msat"] = dd["fees_msat"] - dd["routing_msat"] - dd["losses_msat"]
-        rows.append({"day": d, **dd})
-    totals = {k: sum(r[k] for r in rows) for k in (
-        "completed", "cancelled", "errors", "volume_msat", "fees_msat",
-        "routing_msat", "losses_msat", "net_msat")}
+            "SUM(MAX(amount_msat, 0)) received FROM ledger "
+            "WHERE substr(at, 1, 10) BETWEEN ? AND ? GROUP BY d, account", (start, end)):
+        if r["account"] == "assets:lightning":
+            day(r["d"])["volume_msat"] = r["received"]
+        elif r["account"] in COLUMNS:
+            col, sign = COLUMNS[r["account"]]
+            day(r["d"])[col] = sign * r["s"]
+    rows = [{"day": d, **v, "net_msat": v["fees_msat"] - v["routing_msat"] - v["losses_msat"]}
+            for d, v in sorted(days.items())]
+    totals = {k: sum(r[k] for r in rows) for k in rows[0] if k != "day"} if rows else {}
     bal = balances(conn, end)
     return {"start": start, "end": end, "days": rows, "totals": totals,
             "balances_msat": bal,

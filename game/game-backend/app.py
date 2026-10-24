@@ -99,11 +99,8 @@ def tx():
         conn.close()
 
 
-def init_db(drop: bool = False) -> None:
+def init_db() -> None:
     # It's a demo: every start begins from the hardcoded Alice/Bob seed.
-    if drop:
-        for suffix in ("", "-wal", "-shm"):
-            Path(str(DB_PATH) + suffix).unlink(missing_ok=True)
     # No persisted state, no migrations, no stale in-flight rows.
     for suffix in ("", "-wal", "-shm"):
         Path(str(DB_PATH) + suffix).unlink(missing_ok=True)
@@ -257,7 +254,7 @@ def admin_reset(x_admin_token: str = Header(default="")):
     """dev/demo: wipe and re-seed the world (fresh Alice/Bob + items)"""
     if GAME_ADMIN_TOKEN and x_admin_token != GAME_ADMIN_TOKEN:
         raise HTTPException(403, "bad admin token")
-    init_db(drop=True)
+    init_db()
     return {"status": "reset"}
 
 
