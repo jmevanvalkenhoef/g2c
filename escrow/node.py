@@ -33,6 +33,7 @@ class NodeClient(Protocol):
                     fee_limit_msat: int = 1_000_000,
                     cltv_limit: Optional[int] = None) -> tuple[bool, str]: ...
     def payment_state(self, payment_hash_hex: str) -> Optional[str]: ...
+    def payment_fee_msat(self, payment_hash_hex: str) -> Optional[int]: ...
     def decode_invoice(self, bolt11: str) -> dict: ...
     # lab profile (deterministic seller invoices)
     def create_invoice(self, amount_msat: int, label: str, desc: str) -> tuple[str, str]: ...
@@ -45,6 +46,11 @@ class NodeClient(Protocol):
 _CLN_STATE = {"unpaid": "open", "accepted": "accepted", "paid": "settled",
               "settled": "settled", "cancelled": "cancelled",
               "expired": "cancelled"}
+
+
+def _msat(v) -> int:
+    """CLN amounts: int, or '123msat' on older versions"""
+    return int(str(v).removesuffix("msat"))
 
 
 class CLNNode:
@@ -111,6 +117,16 @@ class CLNNode:
             if st in statuses:
                 return st
         return "failed"
+
+    def payment_fee_msat(self, payment_hash_hex: str) -> Optional[int]:
+        try:
+            res = self.node.call("listpays", {"payment_hash": payment_hash_hex})
+        except (cln.CLNError, OSError) as e:
+            raise NodeError(f"listpays: {e}") from e
+        for p in res.get("pays", []):
+            if p.get("status") == "complete" and "amount_sent_msat" in p:
+                return _msat(p["amount_sent_msat"]) - _msat(p["amount_msat"])
+        return None
 
     def decode_invoice(self, bolt11: str) -> dict:
         d = self.node.call("decodepay", [bolt11])

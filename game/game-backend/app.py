@@ -63,7 +63,7 @@ app = FastAPI(title="g2c demo game")
 
 # ---------------------------------------------------------------- db
 
-def db() -> sqlite3.Connection:
+def _connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
@@ -73,9 +73,21 @@ def db() -> sqlite3.Connection:
 
 
 @contextmanager
+def db():
+    """Read or autocommit connection, closed on exit (sqlite3's own context
+    manager only commits, it never closes)."""
+    conn = _connect()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+@contextmanager
 def tx():
     """Write transaction with immediate lock (single-writer discipline)."""
-    conn = db()
+    conn = _connect()
     try:
         conn.execute("BEGIN IMMEDIATE")
         yield conn

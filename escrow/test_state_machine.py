@@ -6,6 +6,7 @@ and the reserve -> pay -> settle -> commit ordering.
 Run: uv run python test_state_machine.py
 """
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -17,8 +18,11 @@ os.environ["NODE_BACKEND"] = "cln"          # replaced by FakeNode below
 os.environ["LAB_MODE"] = "0"
 os.environ["FEE_MSAT"] = "1000"
 os.environ["FEE_PPM"] = "10000"             # 1 %
+ADMIN = "t" * 32
+os.environ["ADMIN_TOKENS"] = "tester:" + ADMIN
 
 import app                                   # noqa: E402
+import ledger                                # noqa: E402
 from node import NodeError                   # noqa: E402
 
 PASS = FAIL = 0
@@ -44,6 +48,7 @@ class FakeNode:
         self.settle_error = None
         self.cancelled = []
         self.unreachable = False
+        self.routing_fee = 300
 
     def create_hold_invoice(self, h, amount, expiry, cltv=None):
         self.hold[h] = "open"
@@ -77,6 +82,9 @@ class FakeNode:
         if self.unreachable:
             raise NodeError("down")
         return self.payments.get(h)
+
+    def payment_fee_msat(self, h):
+        return self.routing_fee if self.payments.get(h) == "complete" else None
 
     def get_info(self):
         return {}
@@ -122,9 +130,9 @@ def fresh():
     return node, game
 
 
-def new_sale(node, amount=100_000):
+def new_sale(node, amount=100_000, **extra):
     body = app.SaleIn(item_id=1, buyer_id=2, seller_id=1, amount_msat=amount,
-                      seller_payout={"type": "lnurl", "target": "a@b.c"})
+                      seller_payout={"type": "lnurl", "target": "a@b.c"}, **extra)
     r = asyncio.run(app.create_sale(body, "test-secret"))
     import json
     sale = json.loads(r.body)
@@ -360,6 +368,145 @@ except payout.PayoutError:
     check("amountless invoice refused", "PayoutError", "PayoutError")
 check("hash comes from decoding", "decoded-hash",
       payout.verify_invoice(DecodeNode(1000), "x", 1000))
+
+print("== audit trail + ledger ==")
+import shutil  # noqa: E402
+import sqlite3  # noqa: E402
+
+
+def lines_of(sid):
+    with app.db() as c:
+        return {r["account"]: r["s"] for r in c.execute(
+            "SELECT account, SUM(amount_msat) s FROM ledger WHERE sale_id=? "
+            "GROUP BY account", (sid,))}
+
+
+def path_of(sid):
+    with app.db() as c:
+        return [r["to_state"] for r in c.execute(
+            "SELECT to_state FROM sale_events WHERE sale_id=? ORDER BY id", (sid,))]
+
+
+node, game = fresh()
+sid, h = new_sale(node, fiat_currency="EUR", fiat_amount="5.00")
+node.hold[h] = "accepted"
+check("completes", "COMPLETED", run(sid))
+check("every step in the trail", ["AWAITING_PAYMENT", "HTLC_HELD", "RESERVING",
+      "PAYING_SELLER", "SETTLING", "COMMITTING", "COMPLETED"], path_of(sid))
+check("books: fee in, routing out, nothing left in clearing",
+      {"assets:lightning": 2000 - 300, "expense:routing": 300,
+       "revenue:fees": -2000}, {k: v for k, v in lines_of(sid).items() if v})
+check("actual routing fee stored", 300, app.load(sid)["routing_fee_msat"])
+check("payout target forgotten when done", None, app.load(sid)["seller_payout_tgt"])
+with app.db() as c:
+    ev = c.execute("SELECT data FROM sale_events WHERE sale_id=? AND "
+                   "to_state='COMMITTING'", (sid,)).fetchone()
+check("preimage recorded once settled (proof of payment)",
+      app.load(sid)["preimage"], json.loads(ev["data"])["preimage"])
+with app.db() as c:
+    created = c.execute("SELECT data FROM sale_events WHERE sale_id=? AND "
+                        "from_state IS NULL", (sid,)).fetchone()
+check("no payout target in the trail", False, "a@b.c" in created["data"])
+check("fiat price in the trail", "5.00", json.loads(created["data"])["fiat_amount"])
+
+for sql in ("UPDATE sale_events SET reason='x'", "DELETE FROM ledger"):
+    try:
+        with app.tx() as c:
+            c.execute(sql)
+        check(f"refused: {sql}", "refused", "allowed")
+    except sqlite3.DatabaseError:
+        check(f"refused: {sql}", "refused", "refused")
+
+node, game = fresh()
+sid, h = new_sale(node)
+node.hold[h] = "accepted"
+game.reserve_outcome = "rejected"
+check("cancelled sale", "CANCELLED", run(sid))
+check("cancelled sale books nothing", {}, lines_of(sid))
+
+node, game = fresh()
+sid, h = new_sale(node)
+node.hold[h] = "accepted"
+node.settle_error = "invoice already canceled"
+orig_pay2 = node.pay_invoice
+
+
+def pay_then_lose2(*a):
+    r = orig_pay2(*a)
+    node.hold[h] = "cancelled"
+    return r
+
+
+node.pay_invoice = pay_then_lose2
+check("loss sale", "ERROR", run(sid))
+check("loss written off, clearing back to 0",
+      {"assets:lightning": -98_300, "expense:routing": 300,
+       "expense:losses": 98_000}, {k: v for k, v in lines_of(sid).items() if v})
+check("ERROR keeps the payout target for a human", "a@b.c",
+      app.load(sid)["seller_payout_tgt"])
+
+loss_sid = sid
+for label, token, want in (("resolve needs a valid token", "nope", 401),):
+    try:
+        app.admin_resolve(loss_sid, app.ResolveIn(note="x"), token)
+        check(label, want, 200)
+    except HTTPException as e:
+        check(label, want, e.status_code)
+r = app.admin_resolve(loss_sid, app.ResolveIn(note="loss booked, seller kept"), ADMIN)
+check("operator resolves ERROR", ("RESOLVED", "tester"), (r["state"], r["by"]))
+with app.db() as c:
+    last = c.execute("SELECT actor FROM sale_events WHERE sale_id=? "
+                     "ORDER BY id DESC LIMIT 1", (loss_sid,)).fetchone()
+check("trail names the operator", "operator:tester", last["actor"])
+try:
+    app.admin_resolve(loss_sid, app.ResolveIn(note="again"), ADMIN)
+    check("only ERROR can be resolved", 409, 200)
+except HTTPException as e:
+    check("only ERROR can be resolved", 409, e.status_code)
+
+today = ledger.now()[:10]
+rep = app.admin_summary(today, today, ADMIN)
+t = rep["totals"]
+check("summary: net = fees - routing - losses",
+      t["fees_msat"] - t["routing_msat"] - t["losses_msat"], t["net_msat"])
+check("summary: exposure = clearing balance",
+      rep["balances_msat"].get("clearing:sales", 0), rep["open_exposure_msat"])
+check("summary: losses counted", True, t["losses_msat"] >= 98_000)
+
+csv_text = app.admin_ledger_csv(today, today, ADMIN).body.decode()
+check("csv: fee line valued in EUR", True,
+      any(",revenue:fees,-2000," in ln and ",EUR,-0.1000," in ln
+          for ln in csv_text.splitlines()))
+
+v = app.admin_verify(None, None, ADMIN)
+check("verify: chains intact, entries balance", True, v["ok"])
+v2 = app.admin_verify(v["heads"]["sale_events"], v["heads"]["ledger"], ADMIN)
+check("verify: anchored heads still in the chain", True, v2["ok"])
+v3 = app.admin_verify("f" * 64, None, ADMIN)
+check("verify: unknown anchor fails", False, v3["ok"])
+
+copy = os.path.join(tempfile.mkdtemp(), "tampered.db")
+with app.db() as c:
+    c.execute("PRAGMA wal_checkpoint(FULL)")
+shutil.copy(app.DB_PATH, copy)
+tc = sqlite3.connect(copy)
+tc.row_factory = sqlite3.Row
+tc.execute("DROP TRIGGER ledger_no_update")
+tc.execute("UPDATE ledger SET amount_msat=amount_msat+1 WHERE id=1")
+tc.commit()
+check("verify: an edited row breaks the chain", False, ledger.verify(tc)["ok"])
+tc.close()
+
+try:
+    new_sale(node, fiat_currency="EUR")
+    check("fiat needs both fields", 422, 201)
+except HTTPException as e:
+    check("fiat needs both fields", 422, e.status_code)
+try:
+    new_sale(node, fiat_currency="euro", fiat_amount="5")
+    check("fiat currency must be ISO", 422, 201)
+except HTTPException as e:
+    check("fiat currency must be ISO", 422, e.status_code)
 
 print(f"\nstate machine: {PASS} passed, {FAIL} failed")
 sys.exit(0 if FAIL == 0 else 1)

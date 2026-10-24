@@ -153,9 +153,9 @@ class LNDNode:
         except httpx.HTTPError as e:
             return False, f"lnd pay ambiguous: {e}"
 
-    def payment_state(self, payment_hash_hex: str) -> Optional[str]:
+    def _track(self, payment_hash_hex: str) -> Optional[dict]:
         """TrackPaymentV2 by hash: the first stream message is the current
-        state. None = no payment with this hash was ever initiated; raises
+        Payment. None = no payment with this hash was ever initiated; raises
         NodeError when LND can't be asked (unknown is NOT 'not found')."""
         path = ("/v2/router/track/"
                 + base64.urlsafe_b64encode(bytes.fromhex(payment_hash_hex)).decode()
@@ -176,9 +176,22 @@ class LNDNode:
             if "not initiated" in text or "isn't initiated" in text or "not found" in text:
                 return None
             raise NodeError(f"lnd track error: {text[:150]}")
-        st = (msg.get("result") or msg).get("status")
+        return msg.get("result") or msg
+
+    def payment_state(self, payment_hash_hex: str) -> Optional[str]:
+        pay = self._track(payment_hash_hex)
+        if pay is None:
+            return None
         return {"SUCCEEDED": "complete", "FAILED": "failed",
-                "IN_FLIGHT": "pending", "INITIATED": "pending"}.get(st, "pending")
+                "IN_FLIGHT": "pending", "INITIATED": "pending"}.get(
+                    pay.get("status"), "pending")
+
+    def payment_fee_msat(self, payment_hash_hex: str) -> Optional[int]:
+        """routing fee of a SUCCEEDED payment (None: not succeeded/unknown)"""
+        pay = self._track(payment_hash_hex)
+        if not pay or pay.get("status") != "SUCCEEDED" or "fee_msat" not in pay:
+            return None
+        return int(pay["fee_msat"])
 
     def decode_invoice(self, bolt11: str) -> dict:
         d = self._req("GET", f"/v1/payreq/{bolt11}")

@@ -97,6 +97,12 @@ cd poc && docker compose exec -T escrow python -c "
 import sqlite3; c=sqlite3.connect('/app/data/escrow.db')
 for r in c.execute('select sale_id,state,failure_reason from sales'): print(r)"
 
+# escrow audit trail and ledger (append-only; or use /v1/admin/* with ADMIN_TOKENS):
+cd poc && docker compose exec -T escrow python -c "
+import sqlite3; c=sqlite3.connect('/app/data/escrow.db')
+for r in c.execute('select at,sale_id,from_state,to_state,actor from sale_events'): print(r)
+for r in c.execute('select account,sum(amount_msat) from ledger group by account'): print(r)"
+
 # raw node inspection:
 docker compose exec -T cln-escrow lightning-cli --regtest listholdinvoices
 docker compose exec -T cln-buyer  lightning-cli --regtest listpays

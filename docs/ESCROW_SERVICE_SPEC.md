@@ -107,6 +107,22 @@ GET /v1/sales/{sale_id}
         "payment_hash": "...", "failure_reason": "..."? }
 ```
 
+`POST /v1/sales` also takes an optional `fiat_currency` + `fiat_amount`
+(`"EUR"`, `"4.99"`): the price as the buyer saw it, recorded so every sale
+has its fiat value at the time it was made.
+
+Operator API (`X-Admin-Token`; one token per named person in `ADMIN_TOKENS`,
+so the audit trail names who acted; off when unset):
+
+```
+GET  /v1/admin/sales/{id}            sale + events + ledger lines (support, disputes)
+POST /v1/admin/sales/{id}/resolve    { "note": "..." }  ERROR -> RESOLVED; moves no money
+GET  /v1/admin/reports/summary       ?start=&end= (UTC days): outcomes, volume, fees,
+                                     routing, losses, net per day; balances; exposure
+GET  /v1/admin/reports/ledger.csv    ?start=&end=: every ledger line, with fiat value
+GET  /v1/admin/audit/verify          ?events_anchor=&ledger_anchor=: chains + balance check
+```
+
 Optional webhook back to game backend on terminal states (separate shared secret).
 
 Both payout types mean the same thing to the core: **a fresh invoice is minted at
@@ -290,31 +306,41 @@ Reaper: sales in AWAITING_PAYMENT past `expires_at + 60 s` → cancel invoice, C
 
 ## 9. Local store (SQLite)
 
-```sql
-CREATE TABLE sales (
-  sale_id          TEXT PRIMARY KEY,           -- uuid
-  payment_hash     TEXT NOT NULL UNIQUE,       -- hex, idempotency key everywhere
-  preimage_enc     BLOB NOT NULL,              -- encrypted at rest
-  item_id          TEXT NOT NULL,
-  buyer_id         TEXT NOT NULL,
-  seller_id        TEXT NOT NULL,
-  seller_payout_type TEXT NOT NULL,         -- 'lnurl' | 'nwc'
-  seller_payout_uri  TEXT NOT NULL,          -- address, or ENCRYPTED NWC URI (secret!)
-  amount_msat      INTEGER NOT NULL,
-  fee_msat         INTEGER NOT NULL,
-  state            TEXT NOT NULL,
-  failure_reason   TEXT,
-  hold_invoice_id  TEXT,                       -- CLN label
-  seller_pay_id    TEXT,                       -- CLN payment id
-  attempts         INTEGER NOT NULL DEFAULT 0,
-  created_at       TEXT NOT NULL,
-  updated_at       TEXT NOT NULL
-);
-CREATE INDEX idx_sales_state ON sales(state);
-CREATE TABLE state_log (       -- append-only audit trail
-  payment_hash TEXT, from_state TEXT, to_state TEXT, detail TEXT, ts TEXT
-);
-```
+One file, three tables (`escrow/app.py`, `escrow/ledger.py`). Every state
+change writes all of its rows in ONE transaction.
+
+- **`sales`**: the work queue. One mutable row per sale: current state, the
+  next action's inputs (payout invoice and hash, attempts, pending game
+  webhook), amounts, the optional fiat price the buyer saw, and the actual
+  routing fee once paid. Personal data lives only here: the payout target
+  is erased when a sale ends COMPLETED, CANCELLED or RESOLVED (an ERROR sale
+  keeps it for the human who handles it). Player ids are the studio's
+  pseudonyms; erasing the person behind them is the studio's side.
+- **`sale_events`**: append-only audit trail. One row per transition: time
+  (UTC), from, to, reason, actor (`system`, `api`, or `operator:<name>`),
+  and JSON facts (amounts, hashes; the preimage once settled, as proof of
+  payment; never personal data).
+- **`ledger`**: append-only double-entry ledger, in msat, debit positive.
+  Each journal entry sums to zero and is booked at most once.
+
+  | Entry | When | Lines |
+  | --- | --- | --- |
+  | `<sale>:seller_paid` | payout confirmed | clearing:sales +seller, expense:routing +fee, assets:lightning −both |
+  | `<sale>:buyer_settled` | buyer HTLC settled | assets:lightning +amount, clearing:sales −seller, revenue:fees −fee |
+  | `<sale>:loss` | LOSS error | expense:losses +seller, clearing:sales −seller |
+
+  `clearing:sales` is what g2c has fronted and not yet collected: the live
+  exposure.
+
+Both append-only tables refuse UPDATE and DELETE (triggers) and are
+hash-chained (each row hashes the previous row's hash plus its own fields).
+`GET /v1/admin/audit/verify` recomputes the chains and checks that every
+entry balances; its `heads` are copied off-site daily and passed back as
+anchors, so a rewritten tail is detected too.
+
+Not yet: the preimage is stored in plain text (encrypt at rest, or adopt
+same-preimage chaining so g2c never creates one), no schema migrations
+(an older file is refused at startup), no Postgres.
 
 ## 10. Security
 

@@ -9,6 +9,17 @@ API surface (identical to escrow-stub, so the game swaps by ESCROW_URL):
                                QR and the HTLC's arrival is the trigger
   POST /v1/sales/{id}/fail  -> lab only: force the seller-payout leg to fail
 
+Operator API (X-Admin-Token, one token per named operator in ADMIN_TOKENS;
+disabled when unset):
+  GET  /v1/admin/sales/{id}           sale + full history + ledger lines
+  POST /v1/admin/sales/{id}/resolve   close an ERROR sale with a note
+  GET  /v1/admin/reports/summary      per-day volume, fees, costs, exposure
+  GET  /v1/admin/reports/ledger.csv   ledger export for the accountant
+  GET  /v1/admin/audit/verify         check the hash chains; heads to anchor
+
+Every state change is recorded, in the same transaction, in an append-only
+hash-chained audit trail and a double-entry ledger (ledger.py).
+
 Money flow: hold invoice created HASH-ONLY at the node (LND v2 invoices API —
 the node cannot settle without our preimage) -> HTLC arrival detected ->
 game RESERVES the item (frozen at the seller, idempotent on payment_hash) ->
@@ -46,23 +57,28 @@ LAB_MODE=1 loads lab.py (regtest helpers: demo pay bridge, CLN buyer/seller
 stand-ins, peer re-healing). Production never sets it.
 """
 import asyncio
+import csv
 import fcntl
 import hashlib
 import hmac
+import io
 import os
+import re
 import secrets
 import sqlite3
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
+import ledger
 from node import make_node, NodeError
 from payout import PayoutResolver, PayoutError
 
@@ -96,6 +112,18 @@ if not LAB_MODE and SHARED_SECRET in ("", "dev-secret"):
     raise SystemExit("ESCROW_SHARED_SECRET must be set to a real secret "
                      "outside LAB_MODE")
 
+# operators: ADMIN_TOKENS="alice:<token>,bob:<token>". One token per person,
+# so every admin action in the audit trail names who did it. Unset = the
+# operator API is off.
+ADMIN_TOKENS = {}
+for _pair in filter(None, (p.strip() for p in os.environ.get("ADMIN_TOKENS", "").split(","))):
+    _name, _, _tok = _pair.partition(":")
+    if not re.fullmatch(r"[a-z0-9_.-]{1,32}", _name) or not _tok:
+        raise SystemExit(f"ADMIN_TOKENS: bad entry for {_name!r} (want name:token)")
+    if not LAB_MODE and len(_tok) < 32:
+        raise SystemExit(f"ADMIN_TOKENS: token for {_name} is shorter than 32 chars")
+    ADMIN_TOKENS[_tok] = _name
+
 # the escrow's own node (NODE_BACKEND=cln for lab flavors, lnd on the VPS)
 ESCROW_NODE = make_node(require_macaroon=True)
 
@@ -113,10 +141,14 @@ app = FastAPI(title="g2c escrow")
 
 NON_TERMINAL = ("AWAITING_PAYMENT", "HTLC_HELD", "RESERVING", "PAYING_SELLER",
                 "SETTLING", "COMMITTING", "RELEASING", "CANCELLING")
-# ERROR is terminal and needs a human: failure_reason says why
+# ERROR is terminal and needs a human: failure_reason says why. An operator
+# closes it as RESOLVED, with a note in the audit trail.
+# Finished sales drop the payout target (a Lightning address is personal
+# data, an NWC URI holds a wallet secret). ERROR keeps it: a human may need it.
+FORGET_PAYOUT_IN = ("COMPLETED", "CANCELLED", "RESOLVED")
 
 
-def db() -> sqlite3.Connection:
+def _connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
@@ -125,8 +157,20 @@ def db() -> sqlite3.Connection:
 
 
 @contextmanager
+def db():
+    """Read or autocommit connection, closed on exit (sqlite3's own context
+    manager only commits, it never closes)."""
+    conn = _connect()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+@contextmanager
 def tx():
-    conn = db()
+    conn = _connect()
     try:
         conn.execute("BEGIN IMMEDIATE")
         yield conn
@@ -160,25 +204,24 @@ def init_db() -> None:
               force_fail         INTEGER NOT NULL DEFAULT 0,
               payout_attempts    INTEGER NOT NULL DEFAULT 0,
               notify_result      TEXT,                   -- pending game webhook
+              routing_fee_msat   INTEGER,                -- actual, once paid
+              fiat_currency      TEXT,                   -- price the buyer saw
+              fiat_amount        TEXT,                   --   (decimal string)
               state              TEXT NOT NULL,
               failure_reason     TEXT,
               created_at         TEXT NOT NULL,
-              expires_at         TEXT NOT NULL
+              updated_at         TEXT NOT NULL,
+              expires_at         TEXT NOT NULL,
+              payout_forgotten_at TEXT
             );
-            """
+            """ + ledger.SCHEMA
         )
-    # escrow state persists by design (unlike the demo game DB), so guard-add
-    # columns introduced after the first deploy
-    with db() as conn:
-        existing = [r[1] for r in conn.execute("PRAGMA table_info(sales)")]
-        for col, ddl in (
-                ("seller_payout_type", "ALTER TABLE sales ADD COLUMN seller_payout_type TEXT NOT NULL DEFAULT 'stub'"),
-                ("seller_payout_tgt", "ALTER TABLE sales ADD COLUMN seller_payout_tgt TEXT"),
-                ("seller_bolt11", "ALTER TABLE sales ADD COLUMN seller_bolt11 TEXT"),
-                ("payout_attempts", "ALTER TABLE sales ADD COLUMN payout_attempts INTEGER NOT NULL DEFAULT 0"),
-                ("notify_result", "ALTER TABLE sales ADD COLUMN notify_result TEXT")):
-            if col not in existing:
-                conn.execute(ddl)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(sales)")}
+    # no migrations by design (yet): a file from an older build is refused
+    # rather than half-used
+    if not {"updated_at", "routing_fee_msat", "payout_forgotten_at"} <= cols:
+        raise SystemExit(f"{DB_PATH} was created by an older escrow build: "
+                         "drain it, archive it, and start with a fresh file")
     print(f"[escrow] db ready at {DB_PATH} (game={GAME_URL})")
 
 
@@ -197,23 +240,44 @@ def acquire_instance_lock() -> None:
         raise SystemExit(f"another escrow instance holds {DB_PATH}.lock")
 
 
-def set_state(sale_id: str, state: str, reason: Optional[str] = None) -> None:
+Booker = Callable[[sqlite3.Connection, str], None]
+
+
+def transition(sale_id: str, state: str, reason: Optional[str] = None, *,
+               terminal: bool = False, notify: Optional[str] = None,
+               actor: str = "system", data: Optional[dict] = None,
+               book: Optional[Booker] = None) -> None:
+    """One state change, its audit event and its ledger lines, all in ONE
+    transaction: they land together or not at all."""
+    at = ledger.now()
     with tx() as conn:
-        conn.execute(
-            "UPDATE sales SET state=?, failure_reason=COALESCE(?, failure_reason) "
-            "WHERE sale_id=?", (state, reason, sale_id))
+        row = conn.execute("SELECT state FROM sales WHERE sale_id=?",
+                           (sale_id,)).fetchone()
+        sets = "state=?, failure_reason=COALESCE(?, failure_reason), updated_at=?"
+        args = [state, reason, at]
+        if terminal:
+            sets += ", notify_result=?"
+            args.append(notify)
+        if state in FORGET_PAYOUT_IN:
+            sets += ", seller_payout_tgt=NULL, payout_forgotten_at=?"
+            args.append(at)
+        conn.execute(f"UPDATE sales SET {sets} WHERE sale_id=?", (*args, sale_id))
+        ledger.record_event(conn, sale_id, row["state"] if row else None, state,
+                            reason, actor, data, at)
+        if book:
+            book(conn, at)
     print(f"[escrow] {sale_id} -> {state}" + (f" ({reason})" if reason else ""))
+
+
+def set_state(sale_id: str, state: str, reason: Optional[str] = None, **kw) -> None:
+    transition(sale_id, state, reason, **kw)
 
 
 def finish(sale_id: str, state: str, reason: Optional[str] = None,
-           notify: Optional[str] = None) -> None:
+           notify: Optional[str] = None, **kw) -> None:
     """Terminal transition; the game webhook is queued and retried by the
     loop until the game acknowledges it (the game unlocks items on it)."""
-    with tx() as conn:
-        conn.execute(
-            "UPDATE sales SET state=?, failure_reason=COALESCE(?, failure_reason), "
-            "notify_result=? WHERE sale_id=?", (state, reason, notify, sale_id))
-    print(f"[escrow] {sale_id} -> {state}" + (f" ({reason})" if reason else ""))
+    transition(sale_id, state, reason, terminal=True, notify=notify, **kw)
 
 
 def load(sale_id: str) -> Optional[dict]:
@@ -356,6 +420,65 @@ def payout_state(sale: dict) -> Optional[str]:
     return ESCROW_NODE.payment_state(sale["seller_pay_hash"])
 
 
+def payout_fee_msat(sale: dict) -> Optional[int]:
+    """actual routing fee of the completed payout; None if the node can't say"""
+    try:
+        return ESCROW_NODE.payment_fee_msat(sale["seller_pay_hash"])
+    except NodeError as e:
+        print(f"[escrow] {sale['sale_id']} routing fee unknown: {e}")
+        return None
+
+
+# ---------------------------------------------------------------- bookings
+# The two money moments of a sale, each booked in the transaction of the
+# state change that follows from it. Between them, clearing:sales holds what
+# g2c fronted to the seller and has not yet collected from the buyer.
+
+async def payout_done(sid: str, reason: Optional[str] = None) -> None:
+    """seller payment confirmed complete -> SETTLING, booking it"""
+    sale = load(sid)                    # fresh: seller_pay_hash may be new
+    fee = await asyncio.to_thread(payout_fee_msat, sale)
+    paid = sale["seller_amount_msat"]
+
+    def book(conn, at):
+        conn.execute("UPDATE sales SET routing_fee_msat=? WHERE sale_id=?", (fee, sid))
+        ledger.book(conn, f"{sid}:seller_paid", sid,
+                    "seller paid" if fee is not None
+                    else "seller paid; routing fee unknown, check the node",
+                    [("clearing:sales", paid), ("expense:routing", fee or 0),
+                     ("assets:lightning", -(paid + (fee or 0)))], at)
+
+    set_state(sid, "SETTLING", reason, book=book, data={
+        "seller_pay_hash": sale["seller_pay_hash"], "seller_amount_msat": paid,
+        "routing_fee_msat": fee})
+
+
+def buyer_settled(sale: dict) -> None:
+    """buyer payment claimed -> COMMITTING, booking it. The preimage goes
+    in the trail: once settled it is public, and proves the buyer paid."""
+    sid = sale["sale_id"]
+
+    def book(conn, at):
+        ledger.book(conn, f"{sid}:buyer_settled", sid, "buyer payment settled",
+                    [("assets:lightning", sale["amount_msat"]),
+                     ("clearing:sales", -sale["seller_amount_msat"]),
+                     ("revenue:fees", -sale["fee_msat"])], at)
+
+    set_state(sid, "COMMITTING", book=book, data={
+        "payment_hash": sale["payment_hash"], "preimage": sale["preimage"],
+        "amount_msat": sale["amount_msat"], "fee_msat": sale["fee_msat"]})
+
+
+def book_loss(sale: dict) -> Booker:
+    """seller paid, buyer payment gone: write the fronted amount off"""
+    def book(conn, at):
+        ledger.book(conn, f"{sale['sale_id']}:loss", sale["sale_id"],
+                    "seller paid, buyer payment lost",
+                    [("expense:losses", sale["seller_amount_msat"]),
+                     ("clearing:sales", -sale["seller_amount_msat"])], at)
+    return book
+
+
 # ---------------------------------------------------------------- state machine
 
 async def drive(sale: dict) -> None:
@@ -405,7 +528,7 @@ async def drive(sale: dict) -> None:
         # 1. where is the payout we may already have started?
         ps = await asyncio.to_thread(payout_state, sale)
         if ps == "complete":
-            set_state(sid, "SETTLING")
+            await payout_done(sid)
             return
         if ps == "pending":
             return                      # in flight: wait, never roll back
@@ -437,7 +560,7 @@ async def drive(sale: dict) -> None:
             ESCROW_NODE.pay_invoice, bolt11, PAYOUT_TIMEOUT_S,
             routing_fee_limit(sale), cltv_limit)
         if done:
-            set_state(sid, "SETTLING")
+            await payout_done(sid)
         else:
             # NOT a failure verdict: the next tick asks the node (step 1)
             print(f"[escrow] {sid} payout attempt {sale['payout_attempts'] + 1}: {detail}")
@@ -450,18 +573,19 @@ async def drive(sale: dict) -> None:
         try:
             await asyncio.to_thread(ESCROW_NODE.settle_hold_invoice,
                                     sale["preimage"])
-            set_state(sid, "COMMITTING")
+            buyer_settled(sale)
             return
         except NodeError as e:
             err = e
         st = await asyncio.to_thread(hold_state, sale["payment_hash"])
         if st == "settled":
-            set_state(sid, "COMMITTING")
+            buyer_settled(sale)
         elif st == "cancelled":
             # seller paid, buyer refunded: the one outcome the design exists
             # to prevent. The item stays reserved (frozen) for a human to
             # decide: commit (buyer keeps a free item) or release.
-            finish(sid, "ERROR", f"LOSS: seller paid but buyer HTLC cancelled ({err})")
+            finish(sid, "ERROR", f"LOSS: seller paid but buyer HTLC cancelled ({err})",
+                   book=book_loss(sale))
         else:
             print(f"[escrow] {sid} settle error: {err} (invoice {st}, will retry)")
         return
@@ -482,7 +606,7 @@ async def drive(sale: dict) -> None:
         # last line of defence for invariant 1, whichever path led here
         ps = await asyncio.to_thread(payout_state, sale)
         if ps == "complete":
-            set_state(sid, "SETTLING", "payout completed after all")
+            await payout_done(sid, "payout completed after all")
             return
         if ps == "pending":
             return
@@ -581,6 +705,10 @@ class SaleIn(BaseModel):
     seller_id: int
     amount_msat: int
     seller_payout: dict   # {"type": "lnurl"|"nwc"|"stub" (lab), "target": ...}
+    # optional: the price as the buyer saw it ("EUR", "4.99"); recorded so
+    # every sale has its fiat value at the time it was made
+    fiat_currency: Optional[str] = None
+    fiat_amount: Optional[str] = None
 
 
 def check_secret(x_escrow_secret: str) -> None:
@@ -601,6 +729,17 @@ async def create_sale(body: SaleIn, x_escrow_secret: str = Header(default="")):
         raise HTTPException(422, f"unsupported seller payout type {ptype!r}")
     if ptype in ("lnurl", "nwc") and not body.seller_payout.get("target"):
         raise HTTPException(422, "seller payout target missing")
+    if (body.fiat_currency is None) != (body.fiat_amount is None):
+        raise HTTPException(422, "fiat_currency and fiat_amount go together")
+    if body.fiat_currency is not None:
+        try:
+            ok = (re.fullmatch(r"[A-Z]{3}", body.fiat_currency)
+                  and Decimal(body.fiat_amount).is_finite()
+                  and Decimal(body.fiat_amount) > 0)
+        except InvalidOperation:
+            ok = False
+        if not ok:
+            raise HTTPException(422, "fiat price must be like EUR / 4.99")
     preimage = secrets.token_hex(32)
     payment_hash = hashlib.sha256(bytes.fromhex(preimage)).hexdigest()
     sale_id = secrets.token_hex(6)
@@ -613,19 +752,28 @@ async def create_sale(body: SaleIn, x_escrow_secret: str = Header(default="")):
         raise HTTPException(502, f"holdinvoice failed: {e}")
     expires_at = (datetime.now(timezone.utc)
                   + timedelta(seconds=INVOICE_EXPIRY_S)).isoformat()
+    at = ledger.now()
     with tx() as conn:
         conn.execute(
             """INSERT INTO sales (sale_id, payment_hash, preimage, item_id,
                  buyer_id, seller_id, amount_msat, fee_msat, seller_amount_msat,
                  payment_request, seller_payout_type, seller_payout_tgt,
-                 state, created_at, expires_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 fiat_currency, fiat_amount, state, created_at, updated_at,
+                 expires_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (sale_id, payment_hash, preimage, body.item_id, body.buyer_id,
              body.seller_id, body.amount_msat, fee,
              body.amount_msat - fee, bolt11, ptype,
-             body.seller_payout.get("target"),
-             "AWAITING_PAYMENT", datetime.now(timezone.utc).isoformat(),
-             expires_at))
+             body.seller_payout.get("target"), body.fiat_currency,
+             body.fiat_amount, "AWAITING_PAYMENT", at, at, expires_at))
+        ledger.record_event(conn, sale_id, None, "AWAITING_PAYMENT", actor="api",
+                            at=at, data={
+                                "payment_hash": payment_hash,
+                                "amount_msat": body.amount_msat, "fee_msat": fee,
+                                "seller_amount_msat": body.amount_msat - fee,
+                                "payout_type": ptype, "expires_at": expires_at,
+                                "fiat_currency": body.fiat_currency,
+                                "fiat_amount": body.fiat_amount})
     return JSONResponse({
         "sale_id": sale_id,
         "payment_request": bolt11,
@@ -690,6 +838,125 @@ def metrics():
     return {"states": {r["state"]: r["n"] for r in rows},
             "recent": [dict(r) for r in recent],
             "errors_needing_attention": [dict(r) for r in errors]}
+
+
+# ---------------------------------------------------------------- operator api
+
+def operator(x_admin_token: str) -> str:
+    """the operator's name for this token; every admin action is recorded
+    under it"""
+    if not ADMIN_TOKENS:
+        raise HTTPException(404, "operator API disabled (set ADMIN_TOKENS)")
+    found = None
+    for tok, name in ADMIN_TOKENS.items():      # check all: constant time
+        if hmac.compare_digest(x_admin_token.encode(), tok.encode()):
+            found = name
+    if not found:
+        raise HTTPException(401, "bad admin token")
+    return found
+
+
+def day_range(start: Optional[str], end: Optional[str]) -> tuple[str, str]:
+    """inclusive UTC days; default: the current month so far"""
+    today = datetime.now(timezone.utc).date()
+    try:
+        s = date.fromisoformat(start) if start else today.replace(day=1)
+        e = date.fromisoformat(end) if end else today
+    except ValueError:
+        raise HTTPException(422, "dates must be YYYY-MM-DD")
+    if s > e:
+        raise HTTPException(422, "start is after end")
+    return s.isoformat(), e.isoformat()
+
+
+@app.get("/v1/admin/sales/{sale_id}")
+def admin_sale(sale_id: str, x_admin_token: str = Header(default="")):
+    """Everything about one sale, for support and disputes."""
+    who = operator(x_admin_token)
+    sale = load(sale_id)
+    if not sale:
+        raise HTTPException(404, "unknown sale")
+    sale.pop("preimage")                # in the trail once settled, never before
+    with db() as conn:
+        events = conn.execute("SELECT * FROM sale_events WHERE sale_id=? "
+                              "ORDER BY id", (sale_id,)).fetchall()
+        lines = conn.execute("SELECT * FROM ledger WHERE sale_id=? ORDER BY id",
+                             (sale_id,)).fetchall()
+    print(f"[escrow] admin {who} viewed sale {sale_id}")
+    return {"sale": sale, "events": [dict(r) for r in events],
+            "ledger": [dict(r) for r in lines]}
+
+
+class ResolveIn(BaseModel):
+    note: str   # what was decided and done; no personal data
+
+
+@app.post("/v1/admin/sales/{sale_id}/resolve")
+def admin_resolve(sale_id: str, body: ResolveIn, x_admin_token: str = Header(default="")):
+    """Close an ERROR sale once a person has handled it (delivered, refunded
+    or written off out of band). Moves no money and calls no game: it records
+    the decision, by whom, and takes the sale off the attention list."""
+    who = operator(x_admin_token)
+    sale = load(sale_id)
+    if not sale:
+        raise HTTPException(404, "unknown sale")
+    if sale["state"] != "ERROR":
+        raise HTTPException(409, f"only ERROR sales can be resolved (is {sale['state']})")
+    note = body.note.strip()
+    if not 3 <= len(note) <= 2000:
+        raise HTTPException(422, "a note of 3 to 2000 characters is required")
+    finish(sale_id, "RESOLVED", actor=f"operator:{who}", data={"note": note})
+    return {"sale_id": sale_id, "state": "RESOLVED", "by": who}
+
+
+@app.get("/v1/admin/reports/summary")
+def admin_summary(start: Optional[str] = None, end: Optional[str] = None,
+                  x_admin_token: str = Header(default="")):
+    operator(x_admin_token)
+    s, e = day_range(start, end)
+    with db() as conn:
+        return ledger.summary(conn, s, e)
+
+
+@app.get("/v1/admin/reports/ledger.csv")
+def admin_ledger_csv(start: Optional[str] = None, end: Optional[str] = None,
+                     x_admin_token: str = Header(default="")):
+    """Every ledger line in the period. fiat_value is the line's share of the
+    price the buyer saw, when the game sent one."""
+    operator(x_admin_token)
+    s, e = day_range(start, end)
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["id", "at", "entry", "sale_id", "account", "amount_msat", "memo",
+                "fiat_currency", "fiat_value", "hash"])
+    with db() as conn:
+        for r in conn.execute(
+                "SELECT l.*, s.fiat_currency, s.fiat_amount, s.amount_msat sale_msat "
+                "FROM ledger l LEFT JOIN sales s USING (sale_id) "
+                "WHERE substr(l.at, 1, 10) BETWEEN ? AND ? ORDER BY l.id", (s, e)):
+            fiat = ""
+            if r["fiat_amount"]:
+                fiat = str((Decimal(r["fiat_amount"]) * r["amount_msat"]
+                            / r["sale_msat"]).quantize(Decimal("0.0001")))
+            w.writerow([r["id"], r["at"], r["entry"], r["sale_id"], r["account"],
+                        r["amount_msat"], r["memo"], r["fiat_currency"] or "",
+                        fiat, r["hash"]])
+    return Response(out.getvalue(), media_type="text/csv", headers={
+        "Content-Disposition": f'attachment; filename="g2c-ledger-{s}-{e}.csv"'})
+
+
+@app.get("/v1/admin/audit/verify")
+def admin_verify(events_anchor: Optional[str] = None,
+                 ledger_anchor: Optional[str] = None,
+                 x_admin_token: str = Header(default="")):
+    """Recheck the whole trail. Store `heads` daily somewhere g2c can't
+    rewrite; pass the last stored ones back as anchors to prove history
+    wasn't rewritten since."""
+    operator(x_admin_token)
+    anchors = {k: v for k, v in (("sale_events", events_anchor),
+                                 ("ledger", ledger_anchor)) if v}
+    with db() as conn:
+        return ledger.verify(conn, anchors)
 
 
 @app.get("/v1/health")

@@ -98,6 +98,27 @@ was gone, settle errors read as success, payout lookups capped at 500).
 `LOSS:` reason means the seller was paid but the buyer's HTLC got cancelled:
 reconcile by hand. It should never appear; alert on it if you add monitoring.
 
+### 6b. Upgrading to the audit-trail release
+
+The escrow DB now also holds an append-only audit trail and ledger, and the
+escrow **refuses to start** on a DB file from an older build (no migrations
+by design). So:
+
+1. Drain as above.
+2. Archive the old file and start fresh:
+   `systemctl stop g2c-escrow && mv /var/lib/g2c/escrow/escrow.db{,.pre-ledger-$(date +%F)}`
+   (also move `-wal`/`-shm` if present). Keep the archive: it is the only
+   record of the earlier mainnet sales.
+3. Add `ADMIN_TOKENS=<you>:<openssl rand -hex 24>` to `/etc/g2c/escrow.env`.
+4. Start, run one small sale, then
+   `curl -s -H "X-Admin-Token: <token>" localhost:8100/v1/admin/audit/verify`
+   must say `"ok": true`.
+
+Daily: store the `heads` from that call somewhere off the VPS. Monthly:
+`/v1/admin/reports/summary` and `/v1/admin/reports/ledger.csv` for the books.
+An ERROR sale, once handled by hand, is closed with
+`POST /v1/admin/sales/<id>/resolve {"note": "..."}`.
+
 ## 7. Hardening (do soon, none of it changes behaviour)
 
 - **Channel backup off the box**, after every channel open:
