@@ -23,7 +23,7 @@ hash-chained audit trail and a double-entry ledger (ledger.py).
 Money flow: hold invoice created HASH-ONLY at the node (LND v2 invoices API —
 the node cannot settle without our preimage) -> HTLC arrival detected ->
 game RESERVES the item (frozen at the seller, idempotent on payment_hash) ->
-seller payout (PayoutResolver: lnurl/nwc; resolved invoice persisted BEFORE
+seller payout (PayoutResolver: Lightning address; resolved invoice persisted BEFORE
 paying, recovered by payment hash after crashes) -> settle -> game COMMITS
 the item to the buyer. Any failure before the payout: release + cancel =
 item unfrozen, buyer auto-refunded by Lightning itself. Nothing is ever
@@ -50,7 +50,7 @@ the buyer):
 
 Crash recovery: every non-terminal sale is re-driven by the reconcile loop;
 all steps idempotent. Each sale is driven in its own task, so a slow leg
-(LNURL, NWC relay, LND pay, a down game) never stalls the API or other sales.
+(LNURL, LND pay, a down game) never stalls the API or other sales.
 One process only: a lock file refuses a second instance on the same DB.
 
 LAB_MODE=1 loads lab.py (regtest helpers: demo pay bridge, CLN buyer/seller
@@ -150,7 +150,7 @@ NON_TERMINAL = ("AWAITING_PAYMENT", "HTLC_HELD", "RESERVING", "PAYING_SELLER",
 # ERROR is terminal and needs a human: failure_reason says why. An operator
 # closes it as RESOLVED, with a note in the audit trail.
 # Finished sales drop the payout target (a Lightning address is personal
-# data, an NWC URI holds a wallet secret). ERROR keeps it: a human may need it.
+# data). ERROR keeps it: a human may need it.
 FORGET_PAYOUT_IN = ("COMPLETED", "CANCELLED", "RESOLVED")
 
 
@@ -465,8 +465,7 @@ async def drive(sale: dict) -> None:
     sid, state = sale["sale_id"], sale["state"]
 
     if state == "AWAITING_PAYMENT":
-        # all node/network calls run in threads: a slow leg (LNURL, NWC
-        # relay, LND pay) must never stall the API or other sales
+        # all node/network calls run in threads: a slow leg (LNURL, LND pay) must never stall the API or other sales
         inv = await asyncio.to_thread(hold_state, sale["payment_hash"])
         exp = datetime.fromisoformat(sale["expires_at"])
         if inv == "accepted":
@@ -685,7 +684,7 @@ class SaleIn(BaseModel):
     buyer_id: int
     seller_id: int
     amount_msat: int
-    seller_payout: dict   # {"type": "lnurl"|"nwc"|"stub" (lab), "target": ...}
+    seller_payout: dict   # {"type": "lnurl"|"stub" (lab), "target": ...}
     # optional: the price as the buyer saw it ("EUR", "4.99"); recorded so
     # every sale has its fiat value at the time it was made
     fiat_currency: Optional[str] = None
@@ -704,9 +703,9 @@ def check_sale_in(body: SaleIn) -> tuple[int, str]:
     if body.amount_msat <= fee:
         raise HTTPException(422, f"amount must exceed fee ({fee} msat)")
     ptype = body.seller_payout.get("type", "stub")
-    if ptype not in (("lnurl", "nwc", "stub", "lab") if LAB_MODE else ("lnurl", "nwc")):
+    if ptype not in (("lnurl", "stub", "lab") if LAB_MODE else ("lnurl",)):
         raise HTTPException(422, f"unsupported seller payout type {ptype!r}")
-    if ptype in ("lnurl", "nwc") and not body.seller_payout.get("target"):
+    if ptype == "lnurl" and not body.seller_payout.get("target"):
         raise HTTPException(422, "seller payout target missing")
     if (body.fiat_currency is None) != (body.fiat_amount is None):
         raise HTTPException(422, "fiat_currency and fiat_amount go together")

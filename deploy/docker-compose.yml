@@ -4,7 +4,7 @@ name: g2c-signet
 # Env (set in .env next to this file):
 #   DOMAIN=g2c.example.com          (or a DuckDNS subdomain; DNS A-record -> VPS)
 #   ESCROW_SHARED_SECRET=<random>   (game <-> escrow)
-#   PAYOUT_MODE=real                (seller payouts via lnurl/nwc)
+#   PAYOUT_MODE=real                (seller payouts via Lightning address)
 # First boot: channels must be opened + funded manually, see deploy/README.md.
 
 services:

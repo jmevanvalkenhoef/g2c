@@ -475,7 +475,7 @@ async function createCharacter() {
     const p = await api('/v1/players', { method: 'POST', body: JSON.stringify({ name, password, ln_address: ln || null, role: newRole }) });
     sess = p.session; me = p; sessionStorage.setItem('g2c_session', sess);
     prevMine = null; logs = []; log('Entered the realm.');
-    if (!p.ln_address && !p.nwc_uri) { await afterSignIn(); return openPayout(true); }
+    if (!p.ln_address) { await afterSignIn(); return openPayout(true); }
     await afterSignIn();
   } catch (e) { showErr(e.message === 'wrong password' ? 'That name is taken, or the password is wrong' : e.message); }
 }
@@ -497,7 +497,6 @@ function cardHTML(it, { click = '', disabled = false, ribbon = '', sealed = fals
 }
 function badgeHTML() {
   if (me.ln_address) return `<button class="badge" onclick="openPayout()" title="${esc(me.ln_address)}">${BOLT} Lightning address linked</button>`;
-  if (me.nwc_uri) return `<button class="badge" onclick="openPayout()">${BOLT} Wallet connected (NWC)</button>`;
   return `<button class="badge unset" onclick="openPayout()">${BOLT} Link a wallet to sell</button>`;
 }
 
@@ -594,7 +593,7 @@ function renderQuest() {
 }
 
 function render(force = false) {
-  const data = JSON.stringify([!!me, me && [me.name, me.ln_address, me.nwc_uri], items, market, logs, filt, sold, trade && [trade.state, trade.done]]);
+  const data = JSON.stringify([!!me, me && [me.name, me.ln_address], items, market, logs, filt, sold, trade && [trade.state, trade.done]]);
   if (!force && data === lastData) return;
   lastData = data;
   if (!me) { if (!$('#main .create')) renderCreate(); }
@@ -663,7 +662,7 @@ function openCard(id) {
   if (it.listing_status === 'open') return openDialog(`${head}<div class="split">${bigCard(it.name, sats(it.price_msat))}<div>
     <div class="bigprice">${sats(it.price_msat)} sats</div><p class="split-fee">On offer at the Trading Post.</p>
     <div class="actions"><button class="btn ghost" onclick="unlist(${it.listing_id})">Withdraw offer</button></div></div></div>`);
-  const linked = me.ln_address || me.nwc_uri;
+  const linked = me.ln_address;
   openDialog(`${head}<div class="split">${bigCard(it.name)}<div>
     <label class="field"><span>Price in sats</span><input id="price" type="number" min="1" inputmode="numeric" placeholder="e.g. 21000"></label>
     <p class="hint" style="margin-bottom:12px">${linked ? 'When it sells, the sats go straight to your own Lightning wallet.' : 'Link a Lightning wallet first, so the sats have somewhere to go.'}</p>
@@ -684,7 +683,6 @@ async function unlist(listingId) {
 function openPayout(firstTime) {
   openDialog(`<h3>${firstTime ? 'Link your wallet' : 'Your wallet'}</h3><div class="sub">Sales go straight to this wallet. The game never holds sats.</div>
     <label class="field"><span>Lightning address</span><input id="lnaddr" type="text" placeholder="name@walletofsatoshi.com" value="${esc(me.ln_address)}"></label>
-    <label class="field"><span>…or Nostr Wallet Connect</span><input id="nwcuri" type="text" placeholder="nostr+walletconnect://…" value="${esc(me.nwc_uri)}"></label>
     <div class="actions"><button class="btn" onclick="savePayout()">Save</button><button class="btn ghost" onclick="closeDialog()">${firstTime ? 'Later' : 'Cancel'}</button></div>`);
   $('#lnaddr').focus();
 }
@@ -692,7 +690,7 @@ async function savePayout() {
   const ln = $('#lnaddr').value.trim();
   if (ln && !LNADDR.test(ln)) return showErr("That doesn't look like a Lightning address (name@domain)");
   try {
-    me = { ...me, ...(await api('/v1/players/me', { method: 'PUT', body: JSON.stringify({ ln_address: ln, nwc_uri: $('#nwcuri').value }) })) };
+    me = { ...me, ...(await api('/v1/players/me', { method: 'PUT', body: JSON.stringify({ ln_address: ln }) })) };
     log('Linked a Lightning wallet.'); closeDialog(); render(true);
   } catch (e) { showErr('Save failed: ' + e.message); }
 }

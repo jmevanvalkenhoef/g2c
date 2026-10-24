@@ -54,7 +54,7 @@ class SaleIn(BaseModel):
     buyer_id: int
     seller_id: int
     amount_msat: int
-    seller_payout: dict  # {type: stub|lnurl|nwc, target: ...} — unused here
+    seller_payout: dict  # {type: stub|lnurl, target: ...} — unused here
 
 
 def _game_headers() -> dict:

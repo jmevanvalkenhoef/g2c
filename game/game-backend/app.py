@@ -40,7 +40,7 @@ PAYOUT_MODE = os.environ.get("PAYOUT_MODE", "lab")  # lab | real:
 GAME_ADMIN_TOKEN = os.environ.get("GAME_ADMIN_TOKEN", "")  # required for the
 # world reset when set (mainnet); empty = open (lab/dev)
 # lab  -> escrow pays the lab's seller node (regtest)
-# real -> escrow resolves the seller's own payout method (lnurl/nwc, signet+)
+# real -> escrow resolves the seller's own payout method (Lightning address, signet+)
 # an escrow call that timed out may still have minted an invoice: keep the
 # listing held until that invoice can no longer be paid, then reopen it
 AMBIGUOUS_HOLD_S = int(os.environ.get("AMBIGUOUS_HOLD_S", "900"))
@@ -57,7 +57,7 @@ ARCHETYPES = [
 STARTER_ITEMS = 5
 ROLES = ("archmage", "runeknight", "ranger")
 LNADDR_RE = re.compile(r"^[\w.\-+]+@[\w.\-]+(\.[\w\-]+)+$")
-PLAYER_COLS = "id, name, role, ln_address, nwc_uri"
+PLAYER_COLS = "id, name, role, ln_address"
 
 app = FastAPI(title="g2c demo game")
 
@@ -111,7 +111,6 @@ def init_db() -> None:
               id    INTEGER PRIMARY KEY,
               name  TEXT UNIQUE NOT NULL,
               ln_address TEXT,                   -- Lightning address (LUD-16)
-              nwc_uri    TEXT,                   -- nostr+walletconnect://… (secret-ish)
               role       TEXT NOT NULL DEFAULT 'archmage', -- character class (crest)
               pw_salt    TEXT,                   -- set on first login (claim)
               pw_hash    TEXT
@@ -185,7 +184,7 @@ async def require_player(request: Request, response: Response) -> dict:
         raise HTTPException(401, "no player session")
     with db() as conn:
         row = conn.execute(
-            "SELECT p.id, p.name, p.role, p.ln_address, p.nwc_uri FROM sessions s "
+            "SELECT p.id, p.name, p.role, p.ln_address FROM sessions s "
             "JOIN players p ON p.id = s.player_id WHERE s.token=?",
             (token,)).fetchone()
     if not row:
@@ -309,7 +308,6 @@ async def me(request: Request, response: Response):
 
 class ProfileIn(BaseModel):
     ln_address: Optional[str] = None
-    nwc_uri: Optional[str] = None
 
 
 @app.put("/v1/players/me")
@@ -321,9 +319,7 @@ async def update_profile(body: ProfileIn, request: Request, response: Response):
         raise HTTPException(422, "that doesn't look like a Lightning address (name@domain)")
     with tx() as conn:
         conn.execute(
-            "UPDATE players SET ln_address=?, nwc_uri=? WHERE id=?",
-            ((body.ln_address or "").strip() or None,
-             (body.nwc_uri or "").strip() or None, pid))
+            "UPDATE players SET ln_address=? WHERE id=?", (ln_address or None, pid))
     with db() as conn:
         row = conn.execute(
             f"SELECT {PLAYER_COLS} FROM players WHERE id=?", (pid,)).fetchone()
@@ -409,20 +405,18 @@ async def purchase(body: PurchaseIn, request: Request, response: Response):
         if row["seller_id"] == buyer:
             raise HTTPException(409, "you can't buy your own listing")
         seller = conn.execute(
-            "SELECT ln_address, nwc_uri FROM players WHERE id=?",
+            "SELECT ln_address FROM players WHERE id=?",
             (row["seller_id"],)).fetchone()
         conn.execute(
             "UPDATE listings SET status='in_flight', in_flight_until=NULL WHERE id=?",
             (body.listing_id,))
     if PAYOUT_MODE == "real":
-        if not (seller and (seller["ln_address"] or seller["nwc_uri"])):
+        if not (seller and seller["ln_address"]):
             with tx() as c2:      # reopen the listing before refusing
                 c2.execute("UPDATE listings SET status='open' WHERE id=?",
                            (body.listing_id,))
             raise HTTPException(422, "seller has no payout method configured")
-        seller_payout = ({"type": "lnurl", "target": seller["ln_address"]}
-                         if seller["ln_address"] else
-                         {"type": "nwc", "target": seller["nwc_uri"]})
+        seller_payout = {"type": "lnurl", "target": seller["ln_address"]}
     else:
         seller_payout = {"type": "stub", "target": "lab"}
     payload = {   # NOTE: no fee_msat — the fee is the ESCROW's revenue and

@@ -23,14 +23,11 @@ regulatory sign-off, scale.
    APK later via Capacitor/TWA wrap if the concept proves out.
 2. **Wallets = Zeus (signet mode)** on players' phones. Matches the production model
    (external, self-custodial wallets; game never touches sats).
-3. **Seller payout via NWC** (matches eventual UX): seller pairs Zeus's
-   Nostr Wallet Connect URI with their game profile once; at purchase the escrow
-   requests a fresh invoice (`make_invoice`, exact net amount) from the seller's
-   wallet over Nostr relays and pays it — zero seller interaction at sale time,
-   same semantics as the production Lightning-address flow (NWC is a viable
-   production mechanism on mainnet too). Fallback if NWC is unreliable on
-   signet: zero-amount invoice pasted at listing time (UX deviation, accepted
-   only as stopgap).
+3. **Seller payout via Lightning address** (LUD-16): the seller links an
+   address to their game profile once; at purchase the escrow requests a fresh
+   invoice for the exact net amount and pays it — zero seller interaction at
+   sale time. (Nostr Wallet Connect was built and later dropped: one payout
+   method keeps the product and the code simple.)
 4. **Environment ladder**: regtest (dev, scripted payer) → signet VPS + phones
    (multi-device demo) → optional mainnet with throwaway sums (custodial-wallet UX).
 

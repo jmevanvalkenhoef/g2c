@@ -19,7 +19,7 @@ g2c sits between the game and the Lightning Network and settles each trade as on
 | Party | What they get |
 | --- | --- |
 | Buyer | Pays from any Lightning wallet by scanning a QR code. If the sale fails, Lightning refunds the payment automatically. |
-| Seller | Is paid straight to their own wallet (a Lightning address or Nostr Wallet Connect) the moment the sale goes through. No balance to withdraw. |
+| Seller | Is paid straight to their own wallet (a Lightning address) the moment the sale goes through. No balance to withdraw. |
 | Game studio | A safe, in-game market for player trades through a small API, and, as proposed below, a share of each sale. It never handles money. |
 
 g2c keeps no stored balances between sales, but it does control funds during each sale: the buyer's payment locks at g2c's node, only g2c can claim it, and g2c pays the seller from its own funds before claiming it. For the seconds a sale takes, g2c is a custodial intermediary. Its fee is the difference between what the buyer pays and what the seller receives.
@@ -82,7 +82,7 @@ g2c reduces trust to a few explicit points; it cannot remove it, because item ow
 
 The design is proven end to end: a real sale has completed on the Bitcoin mainnet with a funded node (on the earlier transfer-then-undo contract), and the full flow runs on a local test network with crash and fault drills.
 
-- **Built:** the escrow service, a demo game with a web app, LND and Core Lightning support, seller payouts by Lightning address and Nostr Wallet Connect, and automated tests for every failure case above.
+- **Built:** the escrow service, a demo game with a web app, LND and Core Lightning support, seller payouts by Lightning address, and automated tests for every failure case above.
 - **Not yet run:** the Lightning lab drills against the latest reserve-and-commit contract.
 
 Open questions:

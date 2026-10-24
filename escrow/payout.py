@@ -5,8 +5,6 @@ Profiles:
                        only; stands in for a real seller wallet.
   lnurl (type "lnurl"): Lightning address (LUD-16). Two HTTPS GETs, fresh
                        invoice minted at purchase time, seller never involved.
-  nwc  (type "nwc"):   Nostr Wallet Connect (NIP-47): make_invoice via
-                       Nostr relays, NIP-44 encrypted, BIP340 signed.
 
 All resolvers return (bolt11, payment_hash) or raise PayoutError. The
 payment_hash lets the caller verify/crash-recover the payout via listpays.
@@ -92,19 +90,6 @@ class PayoutResolver:
             return self._lab(sale)
         if ptype == "lnurl":
             bolt11, _ = resolve_lnurl(payout["target"], sale["seller_amount_msat"])
-            pay_hash = verify_invoice(self.escrow_node, bolt11,
-                                      sale["seller_amount_msat"])
-            return bolt11, pay_hash
-        if ptype == "nwc":
-            import nwc
-            try:
-                bolt11, _ = nwc.request_invoice(
-                    payout["target"], sale["seller_amount_msat"],
-                    "g2c sale payout")
-            except nwc.NWCError as e:
-                raise PayoutError(f"nwc: {e}") from e
-            # track the hash decoded from the invoice itself, never the one
-            # the wallet claims: crash recovery looks the payout up by it
             pay_hash = verify_invoice(self.escrow_node, bolt11,
                                       sale["seller_amount_msat"])
             return bolt11, pay_hash

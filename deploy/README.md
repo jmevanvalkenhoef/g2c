@@ -10,7 +10,7 @@ signet sats (free, from faucets). Read once, then follow the checklist.
 | network | private regtest | public signet |
 | blocks | local miner 1/15s | real network (~10 min) |
 | buyer wallet | cln-buyer node + tap-QR bridge | **players' Zeus wallets scan the QR** (DEMO_BRIDGE=0) |
-| seller payout | lab's cln-seller node | **seller's real payout method** (lnurl; nwc pending) |
+| seller payout | lab's cln-seller node | **seller's real payout method** (Lightning address) |
 | TLS | none (localhost) | Caddy + Let's Encrypt (needs DOMAIN) |
 | fee | 100 msat | 1000 msat (configurable) |
 
@@ -73,10 +73,8 @@ docker compose logs -f caddy         # watch the TLS certificate issue
 
 ## 5. Known gaps on signet (honest list)
 
-- **NWC payout not implemented** (`payout.py` raises a clear error). The
-  clean signet seller story is: pair Zeus NWC (make_invoice-only), implement
-  the ~150-line Nostr client. This is the main remaining Phase 3 work.
-- Signet LNURL-address providers are scarce; NWC is the more realistic path.
+- Signet Lightning-address providers are scarce: sellers need one that
+  mints signet invoices (or run the lab's regtest flow instead).
 - Funding/announce timing is real-blockchain slow (~1 h per channel setup).
 - The PWA still says "tap the QR to pay" — on signet it should read "scan
   with your wallet" (cosmetic; the pill text comes from the escrow response).

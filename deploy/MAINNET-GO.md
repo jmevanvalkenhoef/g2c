@@ -48,11 +48,9 @@ ssh root@g2c "~/go/bin/lncli listchannels"
 
 ## 4. SELLER PAYOUT SETUP (Phone B)
 
-Either:
-- Wallet of Satoshi: put `name@walletofsatoshi.com` in Alice's payout
-  profile via the PWA (tap the banner), or
-- Zeus: create an NWC connection (make_invoice only, nos.lol relay) and
-  paste the URI. Both are live paths; LNURL is the simpler first demo.
+Put a Lightning address (e.g. `name@walletofsatoshi.com`) in Alice's payout
+profile via the PWA (tap the banner). Lightning addresses are the only payout
+method.
 
 ## 5. THE DRILL (phones)
 
