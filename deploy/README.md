@@ -81,3 +81,21 @@ docker compose logs -f caddy         # watch the TLS certificate issue
 - No backup story yet for `cln-data` (hsm_secret + channel DBs): snapshot the
   volume or lose the wallet. Do not put real mainnet money here without a
   proper backup + ops runbook (spec §10).
+
+## 6. Dashboard (configuration only, not built yet)
+
+Telemetry needs no code: the escrow already records every sale, step and
+sat in its database (`sales`, the append-only `sale_events`, the `ledger`).
+A dashboard just reads that.
+
+- Run **Grafana** on the escrow's server with the **SQLite plugin**, pointed
+  at the escrow DB **read-only** (the escrow must stay its only writer).
+- Each chart is one SQL query, e.g. sales per hour (completed events per
+  hour), volume / fees / network costs / profit (ledger sums per account per
+  day), sales needing attention (state `ERROR`), money fronted right now
+  (balance of `clearing:sales`), stuck sales (non-terminal, old `updated_at`).
+- Save the dashboard as JSON in the repo so it's versioned.
+- Keep it private: behind a login, or reachable only through an SSH tunnel.
+- Not in the DB, add later: node health and liquidity (an LND exporter) and
+  server uptime (a checker on another machine). Phone alerts on `ERROR` can
+  be switched on in Grafana later, also without code.
