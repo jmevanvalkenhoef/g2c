@@ -17,3 +17,5 @@ poc/*/data/
 # OS
 .DS_Store
 escrow/data/
+escrow/.venv/
+__pycache__/
