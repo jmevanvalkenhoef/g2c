@@ -28,7 +28,7 @@ G2C keeps no stored balances between sales, but it does control funds during eac
 
 Each trade runs through five steps in a fixed order, from the easiest to undo to the hardest. Nothing irreversible happens until everything before it has succeeded.
 
-![A trade in five steps, and the failure path](img/whitepaper-trade-flow.png)
+![A trade in five steps, and the failure path](img/whitepaper-trade-flow.svg)
 
 The Lightning hold invoice makes this possible: the buyer's payment is locked at G2C's node and can be claimed or returned, but only G2C holds the secret that claims it. If anything fails before the seller is paid, the item is unfrozen and the lock is released, so the buyer gets the payment back automatically.
 
@@ -36,7 +36,7 @@ The Lightning hold invoice makes this possible: the buyer's payment is locked at
 
 A studio integrates at two points: its backend asks G2C to open a sale, and it answers three calls from G2C that freeze, hand over or unfreeze an item.
 
-![Proposed setup: three parties, two integration points](img/whitepaper-setup.png)
+![Proposed setup: three parties, two integration points](img/whitepaper-setup.svg)
 
 G2C runs its own Lightning node, because only the node that receives a payment can hold it before claiming it. Players keep the wallets they already use; the studio never touches money, and G2C never touches items.
 

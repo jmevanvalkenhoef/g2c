@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1344 826" width="1344" height="826" role="img" aria-labelledby="title desc">
+  <title id="title">The item moves once, after the money is final</title>
+  <desc id="desc">A trade in five steps: the buyer pays, the game freezes the item, G2C pays the seller, G2C claims the payment, the game hands over the item. If the item is unavailable or the payout fails, the item is unfrozen and the buyer refunded, and nothing has moved.</desc>
+  <style>
+    text { font-family: "Inter", "Helvetica Neue", Arial, "Liberation Sans", sans-serif; fill: #111; }
+    .heading { font-size: 26px; font-weight: 600; }
+    .name { font-size: 22px; font-weight: 600; }
+    .sub { font-size: 19px; fill: #555; }
+    .label { font-size: 19px; fill: #555; }
+    .box { fill: #fff; stroke: #c9c6ba; stroke-width: 2; }
+    .final { fill: #e6eff9; stroke: #2f7bd6; stroke-width: 3; }
+    .line { fill: none; stroke: #c3c1b4; stroke-width: 2; }
+  </style>
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#c3c1b4"/>
+    </marker>
+  </defs>
+  <rect width="1344" height="826" fill="#fff"/>
+  <text class="heading" x="42" y="60">The item moves once, after the money is final</text>
+
+  <rect class="box" x="42" y="106" width="566" height="98" rx="12"/>
+  <text class="name" x="70" y="149">1. Buyer pays</text>
+  <text class="sub" x="70" y="180">Payment locked at the G2C node, not yet claimed</text>
+
+  <rect class="box" x="42" y="248" width="566" height="98" rx="12"/>
+  <text class="name" x="70" y="291">2. Game freezes the item</text>
+  <text class="sub" x="70" y="322">Still the seller's, but it can't be traded</text>
+
+  <rect class="box" x="42" y="390" width="566" height="98" rx="12"/>
+  <text class="name" x="70" y="433">3. G2C pays the seller</text>
+  <text class="sub" x="70" y="464">To the seller's own wallet, minus the fee</text>
+
+  <rect class="box" x="42" y="531" width="566" height="98" rx="12"/>
+  <text class="name" x="70" y="574">4. G2C claims the payment</text>
+  <text class="sub" x="70" y="605">The buyer's payment is now final</text>
+
+  <rect class="final" x="42" y="672" width="566" height="98" rx="12"/>
+  <text class="name" x="70" y="715">5. Game hands over the item</text>
+  <text class="sub" x="70" y="746">Ownership changes once, only now</text>
+
+  <path class="line" d="M325 205V244" marker-end="url(#head)"/>
+  <path class="line" d="M325 347V386" marker-end="url(#head)"/>
+  <path class="line" d="M325 489V527" marker-end="url(#head)"/>
+  <path class="line" d="M325 630V668" marker-end="url(#head)"/>
+  <text class="label" x="347" y="658">money final; delivery retried until it lands</text>
+
+  <path class="line" d="M609 297H708V438H609"/>
+  <path class="line" d="M708 368H802" marker-end="url(#head)"/>
+  <text class="label" x="622" y="283">item unavailable</text>
+  <text class="label" x="622" y="470">payout fails</text>
+
+  <rect class="box" x="806" y="319" width="496" height="98" rx="12"/>
+  <text class="name" x="834" y="361">Item unfrozen</text>
+  <text class="sub" x="834" y="393">It never left the seller</text>
+
+  <path class="line" d="M1054 418V491" marker-end="url(#head)"/>
+
+  <rect class="box" x="806" y="495" width="496" height="98" rx="12"/>
+  <text class="name" x="834" y="537">Buyer refunded</text>
+  <text class="sub" x="834" y="569">Lightning returns the payment</text>
+  <text class="label" x="1054" y="637" text-anchor="middle">Ends with nothing moved</text>
+</svg>

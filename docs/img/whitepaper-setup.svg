@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1344 990" width="1344" height="990" role="img" aria-labelledby="title desc">
+  <title id="title">G2C sits between the game and Lightning and runs each sale</title>
+  <desc id="desc">Three groups. The game studio has the game client and the game backend, which owns the items. G2C runs one server with a Lightning node and the escrow service. The Lightning network holds the buyer's wallet and the seller's wallet. The game backend asks the escrow to create a sale; the escrow calls the game to reserve, commit or release an item. The buyer's wallet pays the hold invoice to G2C's node, and the node pays the seller, minus the fee.</desc>
+  <style>
+    text { font-family: "Inter", "Helvetica Neue", Arial, "Liberation Sans", sans-serif; fill: #111; }
+    .heading { font-size: 26px; font-weight: 600; }
+    .group-name { font-size: 23px; font-weight: 600; }
+    .name { font-size: 22px; font-weight: 600; }
+    .sub { font-size: 19px; fill: #555; }
+    .label { font-size: 19px; fill: #555; }
+    .group { fill: #ededeb; stroke: #cfcdc4; stroke-width: 2; }
+    .box { fill: #ededeb; stroke: #c9c6ba; stroke-width: 2; }
+    .core { fill: #d7e1ec; stroke: #2f7bd6; stroke-width: 3; }
+    .line { fill: none; stroke: #c3c1b4; stroke-width: 2; }
+  </style>
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10Z" fill="#c3c1b4"/>
+    </marker>
+  </defs>
+  <rect width="1344" height="990" fill="#fff"/>
+  <text class="heading" x="42" y="60">G2C sits between the game and Lightning and runs each sale</text>
+
+  <rect class="group" x="42" y="99" width="1260" height="184" rx="14"/>
+  <text class="group-name" x="70" y="138">Game studio (partner)</text>
+  <rect class="box" x="70" y="156" width="566" height="98" rx="12"/>
+  <text class="name" x="99" y="198">Game client</text>
+  <text class="sub" x="99" y="230">Players browse, list and buy items</text>
+  <rect class="box" x="707" y="156" width="566" height="98" rx="12"/>
+  <text class="name" x="736" y="198">Game backend</text>
+  <text class="sub" x="736" y="230">Owns the items; freezes, hands over, unfreezes</text>
+  <path class="line" d="M640 205H703" marker-start="url(#head)" marker-end="url(#head)"/>
+
+  <path class="line" d="M884 255V476" marker-end="url(#head)"/>
+  <text class="label" x="870" y="375" text-anchor="end">create sale</text>
+  <path class="line" d="M955 480V259" marker-end="url(#head)"/>
+  <text class="label" x="969" y="375">reserve, commit, release</text>
+
+  <rect class="group" x="42" y="424" width="1260" height="184" rx="14"/>
+  <text class="group-name" x="70" y="463">G2C (one server today)</text>
+  <rect class="box" x="70" y="481" width="566" height="98" rx="12"/>
+  <text class="name" x="99" y="523">Lightning node (LND)</text>
+  <text class="sub" x="99" y="555">Locks buyer payments, pays sellers</text>
+  <rect class="core" x="707" y="481" width="566" height="98" rx="12"/>
+  <text class="name" x="736" y="523">Escrow service</text>
+  <text class="sub" x="736" y="555">Runs each sale step by step; saves every step</text>
+  <path class="line" d="M640 530H703" marker-start="url(#head)" marker-end="url(#head)"/>
+
+  <path class="line" d="M425 806V584" marker-end="url(#head)"/>
+  <text class="label" x="410" y="679" text-anchor="end">pays the hold invoice</text>
+  <path class="line" d="M530 580V692H990V802" marker-end="url(#head)"/>
+  <text class="label" x="624" y="679">pays the seller, minus the fee</text>
+
+  <rect class="group" x="42" y="750" width="1260" height="184" rx="14"/>
+  <text class="group-name" x="70" y="789">Lightning Network</text>
+  <rect class="box" x="70" y="807" width="566" height="98" rx="12"/>
+  <text class="name" x="99" y="849">Buyer's wallet</text>
+  <text class="sub" x="99" y="881">Any Lightning wallet; scans the QR code</text>
+  <rect class="box" x="707" y="807" width="566" height="98" rx="12"/>
+  <text class="name" x="736" y="849">Seller's wallet</text>
+  <text class="sub" x="736" y="881">A Lightning address</text>
+</svg>
