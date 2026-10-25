@@ -152,7 +152,7 @@ async def simulate(seed: int, days: float, fee: tuple[int, int], db_path: Path, 
                 continue
             active.append(sid)
             if not idle(w, sale, t):
-                await app.drive(sale)
+                await app._drive_one(sid)      # the reconcile loop's own step: fresh row, errors caught, retried next tick
 
         if t >= next_snapshot and t < horizon:
             snapshots.append(snapshot(w, t, reader))
@@ -270,7 +270,11 @@ def main() -> None:
     with ProcessPoolExecutor(args.jobs) as pool:
         futures = [pool.submit(one, seed, args.days, fee) for seed, fee in runs]
         for n, future in enumerate(as_completed(futures), 1):
-            r = future.result()
+            try:
+                r = future.result()
+            except Exception as e:           # one broken world must not cost the batch
+                print(f"{n:4}/{len(runs)} a world failed: {e!r}", flush=True)
+                continue
             with args.out.open("a") as f:
                 f.write(json.dumps(r) + "\n")
             print(f"{n:4}/{len(runs)} world {r['seed']} fee {r['fee_msat']}:{r['fee_ppm']}: {r['sales']} sales, "
