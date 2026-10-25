@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Running a Lightning Escrow</title>
+  <meta name="description" content="What it takes to run G2C, an escrow that settles in-game item trades over Lightning: money fronted, fees, refunds and alerts, from the real state machine in simulated worlds.">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="extra.css">
+</head>
+<body>
+<button id="theme" type="button" aria-label="Toggle light or dark theme">theme</button>
+<main>
+  <div class="kicker">G2C · write-up 01</div>
+  <h1>What it takes to run a Lightning escrow</h1>
+  <p class="lede">G2C lets players trade in-game items for bitcoin with one guarantee: the item and the money move together, or neither moves. Before running it for real money, I wanted to know what running it would take: how much money it pays out before it collects, which fee it needs, how often a buyer gets a refund and when an operator should be woken up. I ran the escrow's own state machine through <span data-fill="worlds">–</span> simulated weeks in which the network, the node and the game fail at random, each week under four fee structures.</p>
+
+  <div class="tiles">
+    <!-- filled from the results: money fronted, fee trade-off, alert threshold -->
+    <div class="tile">
+      <div class="label">How long G2C pays before it collects</div>
+      <div class="value"><span data-fill="fronted-s-p99">–</span> s</div>
+      <div class="note">for 99 of 100 seller payouts</div>
+    </div>
+    <div class="tile">
+      <div class="label">Refunds per 1000 paid sales</div>
+      <div class="value"><span data-fill="refunds-p50">–</span></div>
+      <div class="note">at the current fee; 90% of weeks below <span data-fill="refunds-p90">–</span></div>
+    </div>
+    <div class="tile">
+      <div class="label">Broken money guarantees</div>
+      <div class="value"><span data-fill="problems">–</span></div>
+      <div class="note">in <span data-fill="sales-total">–</span> simulated sales</div>
+    </div>
+  </div>
+
+  <h2>The escrow</h2>
+  <p>A trade runs through four steps in a fixed order, from the easiest to undo to the hardest. When the buyer pays, the payment is locked at G2C's Lightning node: G2C can claim it or give it back, and only G2C holds the secret that claims it. Then the game reserves the item, which freezes it at the seller. Then G2C pays the seller, claims the buyer's payment, and the game hands the item to the buyer.</p>
+  <svg class="flow-diagram" viewBox="-10 0 740 190" role="img" aria-labelledby="flow-title">
+    <title id="flow-title">The sale's states. The main path runs from waiting for payment, through payment held, reserving the item, paying the seller and settling, to committing the item and completed. Before the seller is paid, any failure leads to releasing the item, cancelling the payment and cancelled. A game that refuses to deliver a paid item leads to a state that needs a person.</title>
+    <defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 8 4 0 8Z"/></marker></defs>
+    <g class="step"><rect x="0" y="20" width="96" height="40" rx="6"/><text x="48" y="44">awaiting payment</text></g>
+    <g class="step"><rect x="124" y="20" width="96" height="40" rx="6"/><text x="172" y="44">reserving item</text></g>
+    <g class="step"><rect x="248" y="20" width="96" height="40" rx="6"/><text x="296" y="44">paying seller</text></g>
+    <g class="step"><rect x="372" y="20" width="96" height="40" rx="6"/><text x="420" y="44">settling buyer</text></g>
+    <g class="step"><rect x="496" y="20" width="96" height="40" rx="6"/><text x="544" y="44">committing item</text></g>
+    <g class="step done"><rect x="620" y="20" width="100" height="40" rx="6"/><text x="670" y="44">completed</text></g>
+    <g class="step back"><rect x="124" y="130" width="96" height="40" rx="6"/><text x="172" y="154">releasing item</text></g>
+    <g class="step back"><rect x="248" y="130" width="96" height="40" rx="6"/><text x="296" y="154">refunding buyer</text></g>
+    <g class="step back"><rect x="372" y="130" width="96" height="40" rx="6"/><text x="420" y="154">cancelled</text></g>
+    <g class="step person"><rect x="560" y="130" width="160" height="40" rx="6"/><text x="640" y="154">needs a person</text></g>
+    <path class="arrow" d="M96 40H121"/><path class="arrow" d="M220 40H245"/><path class="arrow" d="M344 40H369"/>
+    <path class="arrow" d="M468 40H493"/><path class="arrow" d="M592 40H617"/>
+    <path class="arrow back" d="M172 60V127"/><path class="arrow back" d="M296 60V95H190V127"/>
+    <path class="arrow back" d="M220 150H245"/><path class="arrow back" d="M344 150H369"/>
+    <path class="arrow person" d="M544 60V95H640V127"/>
+    <text class="note" x="300" y="92">before the seller is paid</text>
+  </svg>
+  <p>The code follows four rules, each of which closes a way to pay the seller and refund the buyer as well. It never refunds while the seller's payment might still land, and "timed out" does not count as "failed". It only pays the seller while the buyer's locked payment has enough time left. After an error on settling, it asks the node what happened instead of guessing. And it releases the item before it refunds the buyer. Every step can be repeated safely, so after a crash the escrow simply carries on from the state it saved.</p>
+  <p>An earlier version of this contract has completed one real sale on the Bitcoin mainnet. Everything below is about what it would take to run the current version every day.</p>
+
+  <h2>What is real and what is simulated</h2>
+  <p>The simulation runs the escrow's own state machine, unchanged, and lets it write its own database. Everything around it is simulated.</p>
+  <table class="plain">
+    <thead><tr><th>Part</th><th>In the simulation</th></tr></thead>
+    <tbody>
+      <tr><td>The state machine: every step, retry, timeout and money rule</td><td>real code</td></tr>
+      <tr><td>Its database: sales, the audit trail, the double-entry ledger</td><td>real, written by that code</td></tr>
+      <tr><td>The Lightning node, the game, the buyers, the sellers' payout addresses</td><td>simulated</td></tr>
+      <tr><td>The Lightning network itself, the node software, the game software</td><td>not part of it</td></tr>
+    </tbody>
+  </table>
+  <p>Each simulated week runs on its own clock, so it takes seconds instead of a week. The telemetry is read from the database with the queries a dashboard for the live service would use: sales per hour, money per day, sales that need a person, money fronted and stuck sales. The same queries can later run on the real database.</p>
+
+  <h2>The simulated world</h2>
+  <p>None of the rates is measured; there is no traffic yet to measure them from. Each is an assumption with a range, and every simulated week draws its own values from those ranges, so a conclusion only counts when it holds across them. The model is hierarchical: the ranges set one week's rates, the rates set how often things go wrong at each moment, and each sale and each call then succeeds or fails.</p>
+  <table class="plain priors">
+    <thead><tr><th>Assumption</th><th>Typical week</th><th>90% of weeks</th></tr></thead>
+    <tbody>
+      <tr><td>Sales per hour, on average</td><td>9</td><td>3 to 20</td></tr>
+      <tr><td>Buyers who pay once they open a payment</td><td>89%</td><td>76% to 97%</td></tr>
+      <tr><td>Typical item price</td><td>5,000 sats</td><td>2,600 to 9,600</td></tr>
+      <tr><td>Seller payouts that fail, at the typical price</td><td>4%</td><td>1% to 12%</td></tr>
+      <tr><td>Seller payouts stuck for minutes to hours</td><td>1.7%</td><td>0.3% to 4.7%</td></tr>
+      <tr><td>Payouts that go through while the escrow hears "timed out"</td><td>2.7%</td><td>0.9% to 6.3%</td></tr>
+      <tr><td>Game answers that get lost</td><td>1.7%</td><td>0.4% to 4.7%</td></tr>
+      <tr><td>Node outages per day / game outages per day</td><td>0.4 / 0.8</td><td>0.1 to 1.2 / 0.2 to 2.4</td></tr>
+      <tr><td>Fault rates during a bad period</td><td>8×</td><td>4× to 18×</td></tr>
+    </tbody>
+  </table>
+  <p>Traffic follows a daily rhythm with an evening peak and busier weekends. Prices have a long tail of rare, valuable items, and large payouts fail more often than small ones, as they do on Lightning when a route runs short of liquidity. Routing costs about one sat plus 0.05% of the amount, and the escrow refuses any route that costs more than the sale's own fee.</p>
+  <p>Faults do not arrive one at a time. Each week alternates between healthy periods of a day or two and bad periods of about half an hour in which every fault rate is several times higher, the way a network has bad hours. Outages of the node and the game come on top, and a few of them last twenty times longer than usual. The faults that test the escrow hardest are lost answers: the node pays the seller, or the game reserves the item, and the escrow never hears back. After each week the faults stop and every open sale gets six hours to finish.</p>
+
+  <h2>Checking the checker</h2>
+  <p>After each week, every sale is compared with what really happened in the simulated world, not with what the escrow believes. A completed sale must have a settled buyer payment, exactly one seller payment and an item with the buyer. A cancelled sale must have no seller payment and the item back with the seller. A sale that needs a person must be one the rules allow for. The ledger's hash chains must be intact, and no sale may still be open at the end.</p>
+  <p>To see whether these checks would notice a broken escrow, I broke it twice on purpose, without touching its code. In the first version, the escrow forgets to ask whether the seller was paid before it refunds the buyer. In the second, it forgets the seller's invoice after a lost answer and pays the seller again with a new one. Over five simulated three-day periods, the checks reported <span data-fill="mutant-1">43</span> broken sales for the first and <span data-fill="mutant-2">304</span> for the second, including sellers paid twice. The escrow as it is reported none.</p>
+
+  <h2>Money paid out before it comes in</h2>
+  <p>G2C pays the seller before it collects from the buyer. The buyer's payment is already at G2C's node by then, but it is locked, and G2C claims it only after the payout to the seller has gone through. That order is what lets a failed payout end in an automatic refund. A locked payment can't be spent, so the seller is paid from G2C's own balance on its channels, and for a moment G2C has paid without having collected. That moment is booked in the ledger as money fronted.</p>
+  <figure>
+    <h4>The peak of a week is about its largest sale</h4>
+    <p class="sub">Each dot is one simulated week at the current fee. Both axes are logarithmic.</p>
+    <div class="chart" id="chart-fronted"></div>
+  </figure>
+  <p>Each payout is fronted for a few seconds. Of the <span data-fill="fronted-payments">–</span> seller payouts at the current fee, half were collected within <span data-fill="fronted-s-p50">–</span> s and 99 in 100 within <span data-fill="fronted-s-p99">–</span> s; the longest took <span data-fill="fronted-s-max">–</span>. Payouts that short rarely overlap, so the most G2C had fronted at any moment in a week is the payout for that week's largest sale: <span data-fill="fronted-over-largest-p50">–</span> of the sale's price in the median week, which is the price minus the fee, and at most <span data-fill="fronted-over-largest-max">–</span> when two large sales overlapped. The weeks well below the line are weeks whose largest sale was never paid out, because the buyer did not pay or got a refund. In sats the peak was <span data-fill="fronted-peak-p50">–</span> in the median week. The simulated prices stop at 2,000,000 sats, and <span data-fill="weeks-at-cap">–</span> of the <span data-fill="worlds">–</span> weeks had a sale at that limit. At the end of every week, <span data-fill="fronted-end">–</span> sats were left fronted.</p>
+  <p>For running G2C, this means the node needs spare outgoing balance of at least the largest sale it accepts, with some room for two large sales at once. Traffic hardly changes that. The escrow has no maximum sale amount today, so adding one is the simplest way to limit the money G2C has to keep in its channels.</p>
+
+  <h2>Which fee</h2>
+  <p>A sale's fee is a base amount plus a share of the price, and the escrow never spends more on routing a payout than that fee. So no single sale can lose money, and none of the four fee structures had a losing day: <span data-fill="losing-days">–</span> in <span data-fill="fee-days">–</span> simulated days. Every fee structure ran in the same <span data-fill="worlds">–</span> worlds, so each comparison is made within one world.</p>
+  <figure>
+    <h4>Profit follows the percentage; refunds stay the same</h4>
+    <p class="sub">Median and 90% of worlds, per fee structure. Profit is relative to the current fee in the same world.</p>
+    <div class="chart" id="chart-fees"></div>
+  </figure>
+  <p>Profit follows the percentage almost exactly. A fee of 1.5% earns <span data-fill="profit-15">–</span> the current 1 sat + 1%, which itself keeps <span data-fill="profit-share-now">–</span> of the volume after routing, and the two 0.5% versions earn <span data-fill="profit-05">–</span> and <span data-fill="profit-5-05">–</span>. Refunds hardly move, at about <span data-fill="refunds-p50">–</span> per 1000 paid sales under every fee, because most refunds have nothing to do with the fee. The fee shows up in one place. At 1 sat + 0.5%, small sales start to find no route that fits within their fee: up to <span data-fill="no-route-05-p95">–</span> per 1000 paid sales in a bad week, against <span data-fill="no-route-now-p95">–</span> at the current fee.</p>
+  <p>So the simulation sets a floor of about 0.5%, below which small payouts fail on routing. Above it, the fee is a business decision. The simulated buyers pay any fee, so the right level can only be learned from real ones.</p>
+
+  <h2>Running it</h2>
+  <p>Half of all paid sales end within <span data-fill="flight-p50">–</span> s of the buyer paying, and 90% within <span data-fill="flight-p90">–</span> s. The tail is long: one sale in a hundred takes <span data-fill="flight-p99">–</span> or more and one in a thousand <span data-fill="flight-p999">–</span>. Those are nearly always seller payouts stuck on the network, where the escrow waits for the outcome instead of guessing.</p>
+  <figure>
+    <h4>Time from payment to the end of the sale</h4>
+    <p class="sub">All paid sales at the current fee, completed or refunded.</p>
+    <div class="chart" id="chart-flight"></div>
+  </figure>
+  <p>In the median week at most <span data-fill="stuck-p50">–</span> sales were stuck at the same moment, meaning ten minutes without a step, and in 90% of weeks at most <span data-fill="stuck-p90">–</span>. Refunds were <span data-fill="refunds-p50">–</span> per 1000 paid sales in the median week and below <span data-fill="refunds-p90">–</span> in 90% of weeks. Sales that need a person were rare: <span data-fill="attention-p50">–</span> per 1000 in the median week and <span data-fill="attention-p99">–</span> in the worst. They are buyers who paid for an item the game would not hand over, and the money is safe while a person decides.</p>
+  <p>Those spreads give the dashboard its alerts. A threshold at the level 90% of weeks stay below fires in about one week in ten, which is often enough to notice a bad period and rare enough to take seriously.</p>
+  <table class="plain">
+    <thead><tr><th>Alert when</th><th>Threshold</th><th>Because</th></tr></thead>
+    <tbody>
+      <tr><td>A sale needs a person</td><td>any</td><td>each one is an item or money a person has to decide on</td></tr>
+      <tr><td>A sale has been in flight for</td><td>30 minutes</td><td>only about 1 sale in 100 takes that long</td></tr>
+      <tr><td>Sales stuck at the same moment</td><td>more than <span data-fill="stuck-p90">–</span></td><td>90% of weeks stay below</td></tr>
+      <tr><td>Refunds in a day, per 1000 paid sales</td><td>more than <span data-fill="refunds-p90">–</span></td><td>90% of weeks stay below</td></tr>
+    </tbody>
+  </table>
+
+  <h2>What matters most</h2>
+  <p>Each world drew its own assumptions, so across the <span data-fill="worlds">–</span> worlds the rank correlation between an assumption and an outcome shows which assumptions decide it. With 50 worlds, correlations below about 0.3 are within noise.</p>
+  <figure>
+    <h4>The strongest drivers per outcome</h4>
+    <p class="sub">Rank correlation between each assumption and the outcome, over the worlds at the current fee.</p>
+    <div class="chart" id="chart-drivers"></div>
+  </figure>
+  <p>Refunds come mostly from the game. Items the game refuses to reserve correlate <span data-fill="rho-reserve">–</span> with the refund rate, against <span data-fill="rho-payout-fail">–</span> for failed payouts. Time with stuck sales follows payouts that get stuck (<span data-fill="rho-stuck">–</span>), and profit follows what routing costs per sat moved (<span data-fill="rho-ppm">–</span>). The peak fronted follows the price of the largest items, as the first chart shows.</p>
+  <p>That sets what to measure first once G2C is live: how often the game refuses an item, and how often seller payouts get stuck. Together they decide most of what buyers and operators will see. The telemetry queries in this simulation already measure both.</p>
+
+  <h2>Limits</h2>
+  <ul>
+    <li><strong>The world is assumed.</strong> Every rate is a stated assumption with a range. The conclusions hold across those ranges, not beyond them.</li>
+    <li><strong>The Lightning network is not simulated.</strong> The simulated node behaves the way I expect a real one to; a real node can surprise in ways this model cannot.</li>
+    <li><strong>Buyers do not react to the fee.</strong> A higher fee in the simulation earns more without losing sales, which a real market would not allow.</li>
+    <li><strong>Prices are assumed too.</strong> The money fronted is set by the largest sales, so it is only as right as the assumed tail of rare, valuable items.</li>
+    <li><strong>One escrow process, one node.</strong> The service as built runs one process on one node; scaling beyond that is outside this simulation.</li>
+  </ul>
+
+  <h2>Reproduce it</h2>
+<pre><code># the checks catch both broken escrows
+cd escrow
+uv run python ../sim/mutants.py
+# the simulated weeks, about an hour on four cores
+uv run python ../sim/run.py --worlds 50 --days 7 \
+    --fees 1000:10000,1000:5000,0:15000,5000:5000 --jobs 4
+# summary.json and the charts' data.json
+cd .. && uv run sim/analyze.py</code></pre>
+</main>
+<script src="vendor/d3.min.js"></script>
+<script src="charts.js"></script>
+</body>
+</html>

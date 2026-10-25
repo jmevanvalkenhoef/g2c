@@ -7,7 +7,7 @@ priors, so a spread over worlds is the uncertainty that follows from them.
 
     uv run sim/analyze.py [sim/results/worlds.jsonl]
 
-    2. Money fronted: how much the escrow pays sellers before buyers are collected.
+    2. Money fronted: how much the escrow pays sellers before buyers are collected, and how long.
     3. Fee structures: profit against refunds, the same worlds under each fee.
     4. Operations: sales needing a person, refunds, time in flight, stuck sales,
        and the alert thresholds that follow.
@@ -25,6 +25,7 @@ import numpy as np
 
 SIM = Path(__file__).resolve().parent
 PRODUCTION = (1000, 10000)
+FLIGHT_BINS = [0, 10, 20, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, 86400]
 
 
 def q(x, *ps):
@@ -57,12 +58,16 @@ def main() -> None:
     out["ledger_broken"] = sum(not r["ledger_ok"] for r in rows)
     out["sales_total"] = sum(r["sales"] for r in rows)
 
-    # 2. Money fronted
-    fronted = np.array([r["fronted_max_msat"] / 1000 for r in prod])
-    hourly_volume = np.array([r["volume_msat"] / 1000 / (7 * 24) for r in prod])
+    # 2. Money fronted: a seller payment is booked before the buyer's payment is
+    # collected, for the seconds between the two. Its peak is set by the largest sales.
+    peak = np.array([r["fronted_peak_msat"] / 1000 for r in prod])
+    largest = np.array([r["largest_sale_msat"] / 1000 for r in prod])
+    seconds = np.concatenate([r["fronted_s"] for r in prod])
     out["fronted"] = {
-        "max_sats": q(fronted, 50, 90, 95, 99),
-        "max_in_hours_of_volume": q(fronted / np.maximum(hourly_volume, 1), 50, 90, 95, 99),
+        "peak_sats": q(peak, 50, 90, 95, 99),
+        "peak_over_largest_sale": q(peak / largest, 50, 90, 95, 99, 100),
+        "seconds": q(seconds, 50, 90, 99, 99.9, 100),
+        "payments": int(len(seconds)),
         "end_sats_max": max(r["fronted_end_msat"] / 1000 for r in prod),
     }
 
@@ -102,7 +107,7 @@ def main() -> None:
 
     # 5. What drives the outcomes
     outcomes = {
-        "fronted_in_hours_of_volume": fronted / np.maximum(hourly_volume, 1),
+        "fronted_peak_sats": peak,
         "refunds_per_1000_paid": 1000 * np.array([r["refunded"] for r in prod]) / paid,
         "stuck_minutes": np.array([r["stuck_minutes"] for r in prod], float),
         "profit_share_of_volume": np.array([r["profit_msat"] / r["volume_msat"] for r in prod]),
@@ -115,6 +120,19 @@ def main() -> None:
     out["drivers"] = drivers
 
     (SIM / "results" / "summary.json").write_text(json.dumps(out, indent=1))
+
+    # The write-up's charts also need the worlds one by one.
+    points = {
+        "fronted": [{"seed": r["seed"], "peak": r["fronted_peak_msat"] / 1000, "largest": r["largest_sale_msat"] / 1000} for r in prod],
+        "fronted_seconds": np.histogram(seconds, bins=[0, 5, 10, 15, 20, 30, 60, 3600, 1e9])[0].tolist(),
+        "in_flight_s": np.histogram(flight, bins=FLIGHT_BINS)[0].tolist(),
+        "in_flight_bins": FLIGHT_BINS,
+        "stuck_max": [r["stuck_max"] for r in prod],
+        "fees": {k: {"profit_vs_production": [r["profit_msat"] / b["profit_msat"] for r, b in zip(runs, prod)],
+                     "refunds_per_1000_paid": [1000 * r["refunded"] / r["paid"] for r in runs]}
+                 for k, runs in ((f"{f[0]}:{f[1]}", runs) for f, runs in by_fee.items())},
+    }
+    (SIM / "writeup" / "data.json").write_text(json.dumps({**out, "points": points}))
     print(json.dumps(out, indent=1))
 
 

@@ -212,6 +212,8 @@ def report(seed, params, fee, w, db_path, refused, snapshots, horizon) -> dict:
         fronted_end = conn.execute(QUERIES["fronted_now"]).fetchone()[0]
         verified = ledger.verify(conn)["ok"]
         flight = in_flight_seconds(conn)
+        fronted_s, fronted_peak = fronting(conn)
+        largest = conn.execute("SELECT COALESCE(MAX(amount_msat), 0) FROM sales").fetchone()[0]
         problems = check(w, conn)
         sales = conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
     paid = sum(1 for t in w.truth.values() if t.buyer != "unpaid")
@@ -224,6 +226,7 @@ def report(seed, params, fee, w, db_path, refused, snapshots, horizon) -> dict:
         "days": week, "profit_msat": sum(d["profit"] for d in days), "volume_msat": sum(d["volume"] for d in days),
         "fronted_max_msat": max((s["fronted_msat"] for s in snapshots), default=0),
         "fronted_end_msat": fronted_end,
+        "fronted_peak_msat": fronted_peak, "fronted_s": fronted_s, "largest_sale_msat": largest,
         "stuck_max": max((s["stuck"] for s in snapshots), default=0),
         "stuck_minutes": sum(s["stuck"] > 0 for s in snapshots),
         "in_flight_s": flight,
@@ -240,6 +243,23 @@ def in_flight_seconds(conn: sqlite3.Connection) -> list:
         SELECT a.at AS start, b.at AS end FROM sale_events a JOIN sale_events b ON a.sale_id = b.sale_id
         WHERE a.to_state = 'HTLC_HELD' AND b.to_state IN ('COMPLETED', 'CANCELLED', 'ERROR')""").fetchall()
     return [round((datetime.fromisoformat(r[1]) - datetime.fromisoformat(r[0])).total_seconds(), 1) for r in rows]
+
+
+def fronting(conn: sqlite3.Connection) -> tuple[list, int]:
+    """Each seller payment from the moment it is booked until the buyer's payment is
+    collected: how long it was fronted, and the most fronted at any one moment."""
+    rows = conn.execute("""
+        SELECT a.at, MIN(b.at), s.seller_amount_msat FROM sale_events a
+        JOIN sale_events b ON b.sale_id = a.sale_id AND b.id > a.id
+        JOIN sales s ON s.sale_id = a.sale_id
+        WHERE a.to_state = 'SETTLING' GROUP BY a.id""").fetchall()
+    spans = [(datetime.fromisoformat(a), datetime.fromisoformat(b), m) for a, b, m in rows]
+    moments = sorted([(a, m) for a, _, m in spans] + [(b, -m) for _, b, m in spans], key=lambda x: (x[0], x[1]))
+    now = peak = 0
+    for _, m in moments:
+        now += m
+        peak = max(peak, now)
+    return [round((b - a).total_seconds(), 1) for a, b, _ in spans], peak
 
 
 def one(seed: int, days: float, fee: tuple[int, int]) -> dict:
