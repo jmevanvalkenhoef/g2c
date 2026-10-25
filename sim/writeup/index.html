@@ -148,6 +148,7 @@
   <ul>
     <li><strong>The world is assumed.</strong> Every rate is a stated assumption with a range. The conclusions hold across those ranges, not beyond them.</li>
     <li><strong>The Lightning network is not simulated.</strong> The simulated node behaves the way I expect a real one to; a real node can surprise in ways this model cannot.</li>
+    <li><strong>Routing is one number per payout.</strong> A payout to a seller passes through other nodes, usually large hubs, and each charges a fee. The simulation draws the total of those fees per payout, around one sat plus 0.05% with a wide range per week, and does not model the hops themselves. The floor of about 0.5% for the fee depends directly on that assumption. The cost of G2C's own channels is left out too: opening them, buying inbound liquidity and rebalancing them as payments flow.</li>
     <li><strong>Buyers do not react to the fee.</strong> A higher fee in the simulation earns more without losing sales, which a real market would not allow.</li>
     <li><strong>Prices are assumed too.</strong> The money fronted is set by the largest sales, so it is only as right as the assumed tail of rare, valuable items.</li>
     <li><strong>One escrow process, one node.</strong> The service as built runs one process on one node; scaling beyond that is outside this simulation.</li>
