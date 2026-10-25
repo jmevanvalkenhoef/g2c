@@ -1,4 +1,4 @@
-# g2c signet deployment — Phase 3 runbook
+# G2C signet deployment — Phase 3 runbook
 
 One VPS, real phones (Zeus on signet), real seller payouts. All coins are
 signet sats (free, from faucets). Read once, then follow the checklist.

@@ -1,4 +1,4 @@
-"""g2c escrow stub — a drop-in stand-in for the real Lightning escrow service.
+"""G2C escrow stub — a drop-in stand-in for the real Lightning escrow service.
 
 Honors the same contract as the future real escrow (spec §3.1 from the game's
 point of view, §3.2 from ours):

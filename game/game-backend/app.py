@@ -1,4 +1,4 @@
-"""g2c demo game backend.
+"""G2C demo game backend.
 
 Two hats (kept in ONE process for the PoC, but TWO clearly separated API groups):
 

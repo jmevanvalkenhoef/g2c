@@ -1,4 +1,4 @@
-"""g2c escrow service — hold-invoice escrow over Lightning (LND backend).
+"""G2C escrow service — hold-invoice escrow over Lightning (LND backend).
 
 API surface (identical to escrow-stub, so the game swaps by ESCROW_URL):
   POST /v1/sales            -> 201 {sale_id, payment_request, payment_hash,
@@ -430,7 +430,7 @@ def payout_fee_msat(sale: dict) -> Optional[int]:
 # ---------------------------------------------------------------- bookings
 # The two money moments of a sale, each booked in the transaction of the
 # state change that follows from it. Between them, clearing:sales holds what
-# g2c fronted to the seller and has not yet collected from the buyer.
+# G2C fronted to the seller and has not yet collected from the buyer.
 
 async def payout_done(sid: str, reason: Optional[str] = None) -> None:
     """seller payment confirmed complete -> SETTLING, booking it"""
@@ -923,7 +923,7 @@ def admin_ledger_csv(start: Optional[str] = None, end: Optional[str] = None,
 def admin_verify(events_anchor: Optional[str] = None,
                  ledger_anchor: Optional[str] = None,
                  x_admin_token: str = Header(default="")):
-    """Recheck the whole trail. Store `heads` daily somewhere g2c can't
+    """Recheck the whole trail. Store `heads` daily somewhere G2C can't
     rewrite; pass the last stored ones back as anchors to prove history
     wasn't rewritten since."""
     operator(x_admin_token)

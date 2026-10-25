@@ -325,7 +325,7 @@ change writes all of its rows in ONE transaction.
   | `<sale>:buyer_settled` | buyer HTLC settled | assets:lightning +amount, clearing:sales −seller, revenue:fees −fee |
   | `<sale>:loss` | LOSS error | expense:losses +seller, clearing:sales −seller |
 
-  `clearing:sales` is what g2c has fronted and not yet collected: the live
+  `clearing:sales` is what G2C has fronted and not yet collected: the live
   exposure.
 
 Both append-only tables refuse UPDATE and DELETE (triggers) and are
@@ -335,7 +335,7 @@ entry balances; its `heads` are copied off-site daily and passed back as
 anchors, so a rewritten tail is detected too.
 
 Not yet: the preimage is stored in plain text (encrypt at rest, or adopt
-same-preimage chaining so g2c never creates one), no schema migrations
+same-preimage chaining so G2C never creates one), no schema migrations
 (an older file is refused at startup), no Postgres.
 
 ## 10. Security

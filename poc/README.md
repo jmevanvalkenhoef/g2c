@@ -1,4 +1,4 @@
-# g2c PoC — regtest Lightning escrow lab
+# G2C PoC — regtest Lightning escrow lab
 
 
 > **Runbook**: see `../docs/RUNBOOK.md` for startup, the three watch panes,

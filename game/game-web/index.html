@@ -348,7 +348,7 @@
   <header class="banner">
     <span class="coin l" aria-hidden="true">G2C</span>
     <h1>The Trading Post</h1>
-    <p>A g2c demo realm</p>
+    <p>A G2C demo realm</p>
     <span class="coin r" aria-hidden="true">G2C</span>
   </header>
   <button class="btn ghost small studio-btn" onclick="openStudios()">For game studios</button>
@@ -363,7 +363,7 @@
     <div class="scroll" id="quest" aria-live="polite"></div>
     <div class="note right">
       <h4>Concept game skin</h4>
-      <p>Built on the working g2c escrow. Your game, your items, three API calls.</p>
+      <p>Built on the working G2C escrow. Your game, your items, three API calls.</p>
     </div>
   </div>
 </div>
@@ -725,7 +725,7 @@ function renderTrade(fresh = false) {
   const waiting = i === 0 && !trade.done;
   const outcome = trade.done === 'completed' ? `<div class="outcome good">The ${esc(trade.card)} is yours.</div>`
     : failed ? `<div class="outcome bad">Trade released: the item stays with the seller and your payment was returned.</div>` : '';
-  const html = `<h3>Trade · ${esc(trade.card)}</h3><div class="sub">Buying from ${esc(trade.seller)} through the g2c escrow</div>
+  const html = `<h3>Trade · ${esc(trade.card)}</h3><div class="sub">Buying from ${esc(trade.seller)} through the G2C escrow</div>
     <div class="split">${bigCard(trade.card)}<div>
       <div class="bigprice">${sats(trade.price)} sats</div>
       <p class="split-fee">The seller receives ${sats(trade.seller_amount_msat)} sats · escrow fee ${sats(trade.fee_msat)} sats</p>

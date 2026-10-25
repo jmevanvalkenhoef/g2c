@@ -1,4 +1,4 @@
-# g2c demo game — vertical slice (Phase 2)
+# G2C demo game — vertical slice (Phase 2)
 
 Three modules, one contract. **Hot-swappable by design**: game and escrow only ever
 meet through the specced API (`docs/ESCROW_SERVICE_SPEC.md` §3.1/§3.2), authenticated

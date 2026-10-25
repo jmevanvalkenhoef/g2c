@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# g2c demo — end-to-end contract regression drill.
+# G2C demo — end-to-end contract regression drill.
 #
 #   e2e.sh          against the escrow STUB (boots both services itself)
 #   e2e.sh --real   against the REAL escrow (requires the poc/ lab up with

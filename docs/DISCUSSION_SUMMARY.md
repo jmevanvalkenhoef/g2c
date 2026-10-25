@@ -1,4 +1,4 @@
-# g2c — Discussion Summary & Decision Log
+# G2C — Discussion Summary & Decision Log
 
 Date: 2026-02-14
 Status: Architecture agreed, service spec in `ESCROW_SERVICE_SPEC.md`

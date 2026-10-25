@@ -4,7 +4,7 @@ so the work queue (sales) and the history can never disagree.
 
   sale_events  every state transition: when, from what, to what, why, and
                who made it (system | api | operator:<name>)
-  ledger       every msat g2c moves, as double entry: the lines of one
+  ledger       every msat G2C moves, as double entry: the lines of one
                journal entry sum to zero (debit +, credit -)
 
 Both tables are append-only (triggers refuse UPDATE and DELETE; a mistake
@@ -16,10 +16,10 @@ Personal data (payout targets, player ids) stays out of both tables. It
 lives in `sales`, where it can be erased; these rows refer to sale_id only.
 
 Accounts:
-  assets:lightning   g2c's balance at its node, as moved by sales
+  assets:lightning   G2C's balance at its node, as moved by sales
   clearing:sales     seller paid, buyer payment not yet claimed: the money
-                     g2c is fronting right now (0 once a sale settles)
-  revenue:fees       g2c's fee on every settled sale
+                     G2C is fronting right now (0 once a sale settles)
+  revenue:fees       G2C's fee on every settled sale
   expense:routing    network fee paid to reach the seller
   expense:losses     seller paid but the buyer payment was lost (LOSS)
 """

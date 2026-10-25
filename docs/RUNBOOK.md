@@ -1,4 +1,4 @@
-# g2c Runbook — running and observing the demo
+# G2C Runbook — running and observing the demo
 
 Everything you need to spin up and watch the system. No need to dig through
 chat history. Last updated: 2026-09-05.
