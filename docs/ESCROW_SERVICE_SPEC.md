@@ -1,9 +1,14 @@
 # Escrow Service Specification
 
 Item-for-sats escrow over Bitcoin Lightning, coordinated against a third-party game API.
-Companion doc: `DISCUSSION_SUMMARY.md` (rationale & decision log).
+Companion doc: `notes/DISCUSSION_SUMMARY.md` (rationale & decision log).
 
-Status: DRAFT v0.1
+Status: DRAFT v0.1, written in February 2026 before the build.
+
+> Read this as the original design. The game API in §3.1 and §3.2 still holds and
+> is what `game/` and `poc/` implement. The node backend changed: Greenlight was
+> ruled out (§3.3), the lab runs Core Lightning with the hold plugin and mainnet
+> runs LND. The white paper and `escrow/` describe the current design.
 
 ---
 
@@ -168,7 +173,7 @@ For reconciliation the game asks `GET /v1/sales/{id}` on our side.
 
 Greenlight cannot load custom plugins (open brainstorm issue #423, "TBD", since
 2024-05) and core CLN has no native hold RPCs — so Greenlight offers no path to hold
-invoices. Evidence: `verification-greenlight-holdinvoices.md`.
+invoices. Evidence: `notes/verification-greenlight-holdinvoices.md`.
 
 Node backend options:
 

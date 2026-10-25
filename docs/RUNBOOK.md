@@ -1,7 +1,6 @@
 # G2C Runbook — running and observing the demo
 
-Everything you need to spin up and watch the system. No need to dig through
-chat history. Last updated: 2026-09-05.
+Everything you need to spin up and watch the system. Last updated: 2026-09-05.
 
 ## 1. Start everything (fresh world)
 

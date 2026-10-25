@@ -1,7 +1,7 @@
 # PoC Plan — Escrow Service + Vertical-Slice Game
 
 Status: DRAFT v0.2 (revised for playable-game PoC) · Date: 2026-02-14
-Supersedes v0.1 phase list. Deps: `ESCROW_SERVICE_SPEC.md`, `verification-greenlight-holdinvoices.md`.
+Supersedes v0.1 phase list. Deps: `../ESCROW_SERVICE_SPEC.md`, `verification-greenlight-holdinvoices.md`.
 
 ---
 
